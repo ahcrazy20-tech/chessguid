@@ -16,64 +16,101 @@ struct ChessWebView: UIViewRepresentable {
         
         let userContentController = WKUserContentController()
         
-        // STEALTH SCRIPT
+        // DYNAMIC PROTECTION 1: Advanced Safari Environment Spoofing
         let stealthScript = """
+        // Hide automation flags
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+        Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+        
+        // Fake Chrome/Safari environment
+        window.chrome = { runtime: {} };
+        Object.defineProperty(navigator, 'permissions', {
+            get: () => ({ query: Promise.resolve({ state: 'granted' }) })
+        });
+        
+        // Prevent debugging detection
+        console.log = function() {};
+        console.debug = function() {};
+        
+        // UI Tweaks for better visibility
         document.body.style.paddingTop = '60px';
         document.body.style.backgroundColor = '#262421';
         document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
         document.body.style.userSelect = 'none';
         """
-        userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
-        // LIVE BOARD SCANNER SCRIPT (Automatic FEN Detection)
+        // DYNAMIC PROTECTION 2: Randomized "Human-like" Board Scanner
         let scannerScript = """
         var _lastFen = "";
-        var _scanInterval = setInterval(function() {
-            var _board = document.querySelector('.board');
-            if (!_board) return;
+        
+        function stealthScan() {
+            // Random delay between 2500ms and 5500ms to look human
+            var delay = Math.floor(Math.random() * 3000) + 2500;
+            setTimeout(stealthScan, delay);
             
-            var _fen = "";
-            var _isBlack = _board.classList.contains('orientation-black');
-            
-            for (var _r = 0; _r < 8; _r++) {
-                var _empty = 0;
-                for (var _f = 0; _f < 8; _f++) {
-                    var _sqIndex = _isBlack ? (7-_r)*8 + (7-_f) : _r*8 + _f;
-                    var _square = _board.querySelector('.square-' + _sqIndex);
-                    
-                    if (_square) {
-                        var _pieceEl = _square.querySelector('.piece');
-                        if (_pieceEl) {
-                            if (_empty > 0) { _fen += _empty; _empty = 0; }
-                            var _cls = _pieceEl.getAttribute('class') || "";
-                            var _isWhite = _cls.indexOf('white') !== -1;
-                            var _type = 'p';
-                            
-                            if (_cls.indexOf('knight') !== -1) _type = 'n';
-                            else if (_cls.indexOf('bishop') !== -1) _type = 'b';
-                            else if (_cls.indexOf('rook') !== -1) _type = 'r';
-                            else if (_cls.indexOf('queen') !== -1) _type = 'q';
-                            else if (_cls.indexOf('king') !== -1) _type = 'k';
-                            
-                            _fen += _isWhite ? _type.toUpperCase() : _type.toLowerCase();
+            try {
+                var _board = document.querySelector('.board');
+                if (!_board) return;
+                
+                var _fen = "";
+                var _isBlack = _board.classList.contains('orientation-black');
+                
+                for (var _r = 0; _r < 8; _r++) {
+                    var _empty = 0;
+                    for (var _f = 0; _f < 8; _f++) {
+                        var _sqIndex = _isBlack ? (7-_r)*8 + (7-_f) : _r*8 + _f;
+                        var _square = _board.querySelector('.square-' + _sqIndex);
+                        
+                        if (_square) {
+                            var _pieceEl = _square.querySelector('.piece');
+                            if (_pieceEl) {
+                                if (_empty > 0) { _fen += _empty; _empty = 0; }
+                                var _cls = _pieceEl.getAttribute('class') || "";
+                                var _isWhite = _cls.indexOf('white') !== -1;
+                                var _type = 'p';
+                                
+                                if (_cls.indexOf('knight') !== -1) _type = 'n';
+                                else if (_cls.indexOf('bishop') !== -1) _type = 'b';
+                                else if (_cls.indexOf('rook') !== -1) _type = 'r';
+                                else if (_cls.indexOf('queen') !== -1) _type = 'q';
+                                else if (_cls.indexOf('king') !== -1) _type = 'k';
+                                
+                                _fen += _isWhite ? _type.toUpperCase() : _type.toLowerCase();
+                            } else {
+                                _empty++;
+                            }
                         } else {
                             _empty++;
                         }
-                    } else {
-                        _empty++;
                     }
+                    if (_empty > 0) _fen += _empty;
+                    if (_r < 7) _fen += "/";
                 }
-                if (_empty > 0) _fen += _empty;
-                if (_r < 7) _fen += "/";
+                
+                // Determine turn based on whose pieces are at the bottom
+                var bottomSquare = _isBlack ? 56 : 0;
+                var bottomPiece = _board.querySelector('.square-' + bottomSquare + ' .piece');
+                var turn = 'w';
+                if (bottomPiece) {
+                    var bottomCls = bottomPiece.getAttribute('class') || "";
+                    if (bottomCls.indexOf('black') !== -1) turn = 'b';
+                }
+                
+                _fen += " " + turn + " - - 0 1";
+                
+                if (_fen !== _lastFen && _fen.length > 10) {
+                    _lastFen = _fen;
+                    window.webkit.messageHandlers.fenDetector.postMessage(_fen);
+                }
+            } catch(e) {
+                // Fail silently to avoid detection
             }
-            _fen += " w - - 0 1";
-            
-            if (_fen !== _lastFen && _fen.length > 10) {
-                _lastFen = _fen;
-                window.webkit.messageHandlers.fenDetector.postMessage(_fen);
-            }
-        }, 1500);
+        }
+        
+        // Start the first scan after 2 seconds
+        setTimeout(stealthScan, 2000);
         """
         userContentController.addUserScript(WKUserScript(source: scannerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         userContentController.add(context.coordinator, name: "fenDetector")
@@ -82,6 +119,8 @@ struct ChessWebView: UIViewRepresentable {
         let webview = WKWebView(frame: .zero, configuration: config)
         webview.backgroundColor = UIColor(red: 38/255, green: 36/255, blue: 33/255, alpha: 1.0)
         webview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        
+        // Perfect Safari User-Agent
         webview.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Mobile/15E148 Safari/604.1"
         
         let url = URL(string: engine.currentURL)!
@@ -106,7 +145,6 @@ struct ChessWebView: UIViewRepresentable {
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             if message.name == "fenDetector", let fen = message.body as? String {
-                // Automatically analyze the new position
                 engine.analyzeFEN(fen)
             }
         }
@@ -148,8 +186,8 @@ struct ContentView: View {
                     Spacer()
                     
                     HStack {
-                        Image(systemName: "cpu.fill").foregroundColor(.green)
-                        Text(engine.isThinking ? "  Calculating..." : "  Live Engine Active")
+                        Image(systemName: "shield.lefthalf.filled").foregroundColor(.green)
+                        Text(engine.isThinking ? "  Scanning Stealthily..." : "  Live Engine Active")
                             .font(.caption).foregroundColor(.gray)
                         Spacer()
                     }
@@ -214,21 +252,15 @@ class LiveEngine: ObservableObject {
     private var lastAnalyzedFen: String = ""
     
     func analyzeFEN(_ fen: String) {
-        // Prevent analyzing the same position twice
         if fen == lastAnalyzedFen { return }
         lastAnalyzedFen = fen
         
-        guard let board = Board.fromFEN(fen) else {
-            // If FEN parsing fails (sometimes happens on initial load), wait for next update
-            return
-        }
+        guard let board = Board.fromFEN(fen) else { return }
         
         isThinking = true
         topMoves = ["Calculating..."]
         
-        // Run on background thread to prevent UI freeze
         DispatchQueue.global(qos: .userInitiated).async {
-            // Use the powerful SearchV2 engine
             let search = SearchV2(maxNodes: 100_000, timeLimit: 2.0)
             let results = search.topMoves(board, count: 3, maxDepth: 6)
             
@@ -236,7 +268,6 @@ class LiveEngine: ObservableObject {
                 if results.isEmpty {
                     self.topMoves = ["No legal moves"]
                 } else {
-                    // Format moves nicely
                     self.topMoves = results.map { result in
                         let scoreDisplay = result.score > 90000 ? "Mate" : String(format: "%+.1f", Double(result.score) / 100.0)
                         return "\(result.san)  (Score: \(scoreDisplay))"
