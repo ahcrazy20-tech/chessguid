@@ -7,15 +7,16 @@ struct ChessWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         
-        // FIX FOR LOGIN: Persistent data store & Process Pool
+        // FIX FOR LOGIN: Persistent data store
         config.websiteDataStore = WKWebsiteDataStore.default()
-     
         
         config.allowsInlineMediaPlayback = true
         config.defaultWebpagePreferences.preferredContentMode = .mobile
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
         
         let userContentController = WKUserContentController()
+        
+        // STEALTH SCRIPT
         let stealthScript = """
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
         document.body.style.paddingTop = '60px';
@@ -24,6 +25,58 @@ struct ChessWebView: UIViewRepresentable {
         document.body.style.userSelect = 'none';
         """
         userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        
+        // LIVE BOARD SCANNER SCRIPT (Automatic FEN Detection)
+        let scannerScript = """
+        var _lastFen = "";
+        var _scanInterval = setInterval(function() {
+            var _board = document.querySelector('.board');
+            if (!_board) return;
+            
+            var _fen = "";
+            var _isBlack = _board.classList.contains('orientation-black');
+            
+            for (var _r = 0; _r < 8; _r++) {
+                var _empty = 0;
+                for (var _f = 0; _f < 8; _f++) {
+                    var _sqIndex = _isBlack ? (7-_r)*8 + (7-_f) : _r*8 + _f;
+                    var _square = _board.querySelector('.square-' + _sqIndex);
+                    
+                    if (_square) {
+                        var _pieceEl = _square.querySelector('.piece');
+                        if (_pieceEl) {
+                            if (_empty > 0) { _fen += _empty; _empty = 0; }
+                            var _cls = _pieceEl.getAttribute('class') || "";
+                            var _isWhite = _cls.indexOf('white') !== -1;
+                            var _type = 'p';
+                            
+                            if (_cls.indexOf('knight') !== -1) _type = 'n';
+                            else if (_cls.indexOf('bishop') !== -1) _type = 'b';
+                            else if (_cls.indexOf('rook') !== -1) _type = 'r';
+                            else if (_cls.indexOf('queen') !== -1) _type = 'q';
+                            else if (_cls.indexOf('king') !== -1) _type = 'k';
+                            
+                            _fen += _isWhite ? _type.toUpperCase() : _type.toLowerCase();
+                        } else {
+                            _empty++;
+                        }
+                    } else {
+                        _empty++;
+                    }
+                }
+                if (_empty > 0) _fen += _empty;
+                if (_r < 7) _fen += "/";
+            }
+            _fen += " w - - 0 1";
+            
+            if (_fen !== _lastFen && _fen.length > 10) {
+                _lastFen = _fen;
+                window.webkit.messageHandlers.fenDetector.postMessage(_fen);
+            }
+        }, 1500);
+        """
+        userContentController.addUserScript(WKUserScript(source: scannerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        userContentController.add(context.coordinator, name: "fenDetector")
         config.userContentController = userContentController
         
         let webview = WKWebView(frame: .zero, configuration: config)
@@ -42,6 +95,22 @@ struct ChessWebView: UIViewRepresentable {
             uiView.load(URLRequest(url: URL(string: engine.currentURL)!))
         }
     }
+    
+    func makeCoordinator() -> Coordinator {
+        Coordinator(engine: engine)
+    }
+    
+    class Coordinator: NSObject, WKScriptMessageHandler {
+        let engine: LiveEngine
+        init(engine: LiveEngine) { self.engine = engine }
+        
+        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            if message.name == "fenDetector", let fen = message.body as? String {
+                // Automatically analyze the new position
+                engine.analyzeFEN(fen)
+            }
+        }
+    }
 }
 
 struct ContentView: View {
@@ -50,7 +119,6 @@ struct ContentView: View {
     @State private var buttonPosition: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
     @State private var isDragging = false
-    @State private var fenInput: String = ""
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -79,19 +147,14 @@ struct ContentView: View {
                 VStack {
                     Spacer()
                     
-                    // FEN Input for Live Analysis
                     HStack {
-                        TextField("Paste FEN here...", text: $fenInput)
-                            .textFieldStyle(.roundedBorder)
-                            .autocapitalization(.none)
-                            .font(.caption)
-                        
-                        Button(action: { engine.analyzeFEN(fenInput) }) {
-                            Image(systemName: "cpu.fill").foregroundColor(.green).font(.title2)
-                        }
+                        Image(systemName: "cpu.fill").foregroundColor(.green)
+                        Text(engine.isThinking ? "  Calculating..." : "  Live Engine Active")
+                            .font(.caption).foregroundColor(.gray)
+                        Spacer()
                     }
                     .padding(.horizontal)
-                    .padding(.bottom, 5)
+                    .padding(.bottom, 2)
                     
                     EnginePanel(moves: engine.topMoves, isThinking: engine.isThinking)
                         .padding(.horizontal).padding(.bottom, 40)
@@ -126,7 +189,7 @@ struct EnginePanel: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: "lock.shield.fill").foregroundColor(.green)
-                Text(isThinking ? "  Calculating..." : "  Top 3 Engine Moves").font(.headline).foregroundColor(.white)
+                Text(isThinking ? "  Analyzing Position..." : "  Top 3 Best Moves").font(.headline).foregroundColor(.white)
                 Spacer()
             }
             Divider().background(Color.white.opacity(0.3))
@@ -144,13 +207,19 @@ struct EnginePanel: View {
 }
 
 class LiveEngine: ObservableObject {
-    @Published var topMoves: [String] = ["Paste FEN & tap CPU to analyze"]
+    @Published var topMoves: [String] = ["Waiting for board..."]
     @Published var isThinking: Bool = false
     @Published var currentURL: String = "https://www.chess.com/play/computer"
     
+    private var lastAnalyzedFen: String = ""
+    
     func analyzeFEN(_ fen: String) {
+        // Prevent analyzing the same position twice
+        if fen == lastAnalyzedFen { return }
+        lastAnalyzedFen = fen
+        
         guard let board = Board.fromFEN(fen) else {
-            topMoves = ["Invalid FEN format"]
+            // If FEN parsing fails (sometimes happens on initial load), wait for next update
             return
         }
         
@@ -159,6 +228,7 @@ class LiveEngine: ObservableObject {
         
         // Run on background thread to prevent UI freeze
         DispatchQueue.global(qos: .userInitiated).async {
+            // Use the powerful SearchV2 engine
             let search = SearchV2(maxNodes: 100_000, timeLimit: 2.0)
             let results = search.topMoves(board, count: 3, maxDepth: 6)
             
@@ -166,7 +236,11 @@ class LiveEngine: ObservableObject {
                 if results.isEmpty {
                     self.topMoves = ["No legal moves"]
                 } else {
-                    self.topMoves = results.map { "\($0.san)  (Score: \($0.score / 100))" }
+                    // Format moves nicely
+                    self.topMoves = results.map { result in
+                        let scoreDisplay = result.score > 90000 ? "Mate" : String(format: "%+.1f", Double(result.score) / 100.0)
+                        return "\(result.san)  (Score: \(scoreDisplay))"
+                    }
                 }
                 self.isThinking = false
             }
