@@ -13,7 +13,6 @@ struct ChessWebView: UIViewRepresentable {
         
         let userContentController = WKUserContentController()
         
-        // Stealth Script
         let stealthScript = """
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
         document.body.style.paddingTop = '60px';
@@ -23,7 +22,7 @@ struct ChessWebView: UIViewRepresentable {
         """
         userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
-        // BULLETPROOF Scanner Script using IMG ALT text
+        // NUCLEAR OPTION SCANNER
         let scannerScript = """
         var _lastFen = "";
         
@@ -43,27 +42,49 @@ struct ChessWebView: UIViewRepresentable {
                         var actualFile = isBlack ? (7 - file) : file;
                         var squareIndex = actualRank * 8 + actualFile;
                         
-                        // Chess.com often puts the square class directly on the IMG tag
-                        var img = board.querySelector('img.square-' + squareIndex) || 
-                                  board.querySelector('[data-square="' + squareIndex + '"] img') ||
-                                  board.querySelector('.square-' + squareIndex + ' img');
+                        var square = board.querySelector('.square-' + squareIndex);
+                        var pieceType = null;
+                        var isWhite = false;
                         
-                        if (img) {
+                        if (square) {
+                            // STRATEGY 1: Standard .piece class
+                            var piece = square.querySelector('.piece');
+                            
+                            // STRATEGY 2: Img tag
+                            if (!piece) piece = square.querySelector('img');
+                            
+                            // STRATEGY 3: SVG tag
+                            if (!piece) piece = square.querySelector('svg');
+                            
+                            // STRATEGY 4: Any element with 'piece' in class
+                            if (!piece) {
+                                var all = square.querySelectorAll('*');
+                                for (var i=0; i<all.length; i++) {
+                                    if ((all[i].className || '').toLowerCase().includes('piece')) {
+                                        piece = all[i];
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            if (piece) {
+                                var cls = (piece.className || '').toLowerCase();
+                                var alt = (piece.alt || '').toLowerCase();
+                                var src = (piece.src || '').toLowerCase();
+                                var combined = cls + ' ' + alt + ' ' + src;
+                                
+                                isWhite = combined.includes('white');
+                                if (combined.includes('knight')) pieceType = 'n';
+                                else if (combined.includes('bishop')) pieceType = 'b';
+                                else if (combined.includes('rook')) pieceType = 'r';
+                                else if (combined.includes('queen')) pieceType = 'q';
+                                else if (combined.includes('king')) pieceType = 'k';
+                                else if (combined.includes('pawn')) pieceType = 'p';
+                            }
+                        }
+                        
+                        if (pieceType) {
                             if (emptyCount > 0) { fen += emptyCount; emptyCount = 0; }
-                            
-                            // Use ALT text for 100% reliability
-                            var alt = img.getAttribute('alt') || img.className || '';
-                            var lowerAlt = alt.toLowerCase();
-                            
-                            var isWhite = lowerAlt.includes('white');
-                            var pieceType = 'p';
-                            
-                            if (lowerAlt.includes('knight')) pieceType = 'n';
-                            else if (lowerAlt.includes('bishop')) pieceType = 'b';
-                            else if (lowerAlt.includes('rook')) pieceType = 'r';
-                            else if (lowerAlt.includes('queen')) pieceType = 'q';
-                            else if (lowerAlt.includes('king')) pieceType = 'k';
-                            
                             fen += isWhite ? pieceType.toUpperCase() : pieceType.toLowerCase();
                         } else {
                             emptyCount++;
@@ -74,14 +95,7 @@ struct ChessWebView: UIViewRepresentable {
                     if (rank < 7) fen += '/';
                 }
                 
-                // Detect turn
                 var turn = 'w';
-                if (document.body.classList.contains('black-to-move') || 
-                    board.classList.contains('black-to-move') ||
-                    document.querySelector('.black-to-move')) {
-                    turn = 'b';
-                }
-                
                 fen += ' ' + turn + ' - - 0 1';
                 return fen;
             } catch(e) {
