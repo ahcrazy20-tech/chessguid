@@ -8,14 +8,19 @@ extension Board {
         guard rows.count == 8 else { return nil }
         
         var pieces: [Piece?] = Array(repeating: nil, count: 64)
-        var sq = 56 // Start from a8 (top-left)
+        var sq = 56 // Start from a8 (rank 8, file a)
         
-        for row in rows {
+        for (rowIndex, row) in rows.enumerated() {
             var fileInRow = 0
             for char in row {
                 if let num = Int(String(char)) {
                     // Empty squares
-                    sq += num
+                    for _ in 0..<num {
+                        if sq < 64 {
+                            pieces[sq] = nil
+                            sq += 1
+                        }
+                    }
                     fileInRow += num
                 } else {
                     let color: ChessColor = char.isUppercase ? .white : .black
@@ -34,13 +39,16 @@ extension Board {
                     
                     if let type = type, sq < 64 {
                         pieces[sq] = Piece(type: type, color: color)
+                        sq += 1
                     }
-                    sq += 1
                     fileInRow += 1
                 }
             }
-            // Move to next rank (go down 2 ranks in our indexing)
-            sq = 56 - (8 - fileInRow) - (7 - rows.firstIndex(of: row)!) * 8
+            
+            // Move to the next rank (go down one rank)
+            if rowIndex < 7 {
+                sq = 56 - (rowIndex + 1) * 8
+            }
         }
         
         let side: ChessColor = components.count > 1 && components[1] == "b" ? .black : .white
