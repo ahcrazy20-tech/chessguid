@@ -17,7 +17,10 @@ extension Board {
                 } else {
                     let color: ChessColor = char.isUppercase ? .white : .black
                     let type: PieceType?
-                    switch char.lowercase {
+                    
+                    // FIX: Use String(char).lowercased() instead of char.lowercase
+                    let lowerChar = String(char).lowercased()
+                    switch lowerChar {
                     case "p": type = .pawn
                     case "n": type = .knight
                     case "b": type = .bishop
@@ -26,6 +29,7 @@ extension Board {
                     case "k": type = .king
                     default: type = nil
                     }
+                    
                     if let type = type {
                         pieces[sq] = Piece(type: type, color: color)
                     }
