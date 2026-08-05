@@ -8,61 +8,46 @@ struct ChessWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         
-        // STEALTH: Wipe cache/cookies
-        let dataStore = WKWebsiteDataStore.default()
-        dataStore.removeData(ofTypes: WKWebsiteDataStore.allWebsiteDataTypes(), modifiedSince: Date.distantPast) { }
+        // FIX: Use a persistent data store so bots can load (don't wipe cookies every time)
+        config.websiteDataStore = WKWebsiteDataStore.default()
         
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.defaultWebpagePreferences.preferredContentMode = .mobile
         config.defaultWebpagePreferences.allowsContentJavaScript = true
+        config.javaScriptCanOpenWindowsAutomatically = true
         
         let userContentController = WKUserContentController()
         
-        // STEALTH: Advanced Anti-Fingerprinting & Dimension Fix
+        // STEALTH & UI FIX: Anti-Fingerprinting + Fix Top Bar Visibility
         let stealthAndFixScript = """
         // Anti-Fingerprinting
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
         Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-        Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 4});
+        
+        // FIX: Push content down so the "X" button and top bar are visible under the notch
+        document.body.style.paddingTop = '60px';
+        document.body.style.backgroundColor = '#262421'; // Match chess.com dark theme
         
         // Disable Zoom and Text Selection (Stealth)
         document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
         document.body.style.userSelect = 'none';
-        document.body.style.webkitUserSelect = 'none';
-        
-        // FIX DIMENSIONS: Force board to fit screen
-        const style = document.createElement('style');
-        style.innerHTML = `
-            body { margin: 0; padding: 0; overflow-x: hidden; width: 100vw; }
-            .board { width: 100% !important; max-width: 100vw !important; height: auto !important; }
-            .layout { width: 100% !important; }
-        `;
-        document.head.appendChild(style);
         """
         userContentController.addUserScript(WKUserScript(source: stealthAndFixScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         
-        // Auto-Detect Color & Board State
+        // Auto-Detect Color
         let detectionScript = """
         function detectAndReport() {
             let color = 'unknown';
-            let opening = 'Unknown Opening';
             const board = document.querySelector('.board');
-            
             if (board) {
                 if (board.classList.contains('orientation-white')) color = 'white';
                 else if (board.classList.contains('orientation-black')) color = 'black';
-                
-                const openingTag = document.querySelector('.opening-name');
-                if (openingTag) opening = openingTag.innerText;
             }
-            
             if (color !== 'unknown') {
-                window.webkit.messageHandlers.boardState.postMessage(color + '|' + opening);
+                window.webkit.messageHandlers.boardState.postMessage(color);
             }
-            
-            const randomDelay = Math.floor(Math.random() * 4000) + 4000;
-            setTimeout(detectAndReport, randomDelay);
+            setTimeout(detectAndReport, 5000);
         }
         setTimeout(detectAndReport, 2000);
         """
@@ -71,15 +56,15 @@ struct ChessWebView: UIViewRepresentable {
         config.userContentController = userContentController
         
         let webview = WKWebView(frame: .zero, configuration: config)
-        webview.backgroundColor = UIColor.systemBackground
+        webview.backgroundColor = UIColor(red: 38/255, green: 36/255, blue: 33/255, alpha: 1.0)
         webview.isOpaque = true
         webview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webview.allowsBackForwardNavigationGestures = true
         
-        // Use standard Safari User-Agent to help bots load
+        // Perfect Safari User-Agent
         webview.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Mobile/15E148 Safari/604.1"
         
-        let url = URL(string: "https://www.chess.com/play/computer")!
+        let url = URL(string: engine.currentURL)!
         webview.load(URLRequest(url: url))
         
         return webview
@@ -87,6 +72,10 @@ struct ChessWebView: UIViewRepresentable {
     
     func updateUIView(_ uiView: WKWebView, context: Context) {
         uiView.frame = UIScreen.main.bounds
+        // If URL changed, reload
+        if let currentURL = uiView.url, currentURL.absoluteString != engine.currentURL {
+            uiView.load(URLRequest(url: URL(string: engine.currentURL)!))
+        }
     }
     
     func makeCoordinator() -> Coordinator {
@@ -98,14 +87,8 @@ struct ChessWebView: UIViewRepresentable {
         init(engine: LiveEngine) { self.engine = engine }
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            if message.name == "boardState", let data = message.body as? String {
-                let parts = data.split(separator: "|")
-                if let color = parts.first {
-                    engine.updateDetectedColor(String(color))
-                }
-                if parts.count > 1 {
-                    engine.updateOpening(String(parts[1]))
-                }
+            if message.name == "boardState", let color = message.body as? String {
+                engine.updateDetectedColor(color)
             }
         }
     }
@@ -117,19 +100,51 @@ struct ContentView: View {
     @State private var showEngine = true
     @State private var buttonPosition: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
-    @State private var isDragging = false // FIX: Tracks if button is being dragged
+    @State private var isDragging = false
     
     var body: some View {
         ZStack(alignment: .bottom) {
-            ChessWebView(engine: engine)
-                .ignoresSafeArea()
+            VStack(spacing: 0) {
+                // Top Navigation Bar (Fixes the missing "X" button issue)
+                HStack {
+                    Button(action: { engine.switchToChessCom() }) {
+                        Text("Play")
+                            .fontWeight(.bold)
+                            .foregroundColor(engine.currentURL.contains("chess.com") ? .white : .gray)
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 8)
+                            .background(engine.currentURL.contains("chess.com") ? Color.blue : Color.clear)
+                            .cornerRadius(8)
+                    }
+                    
+                    Spacer()
+                    
+                    Button(action: { engine.switchToLichess() }) {
+                        Text("Real Engine")
+                            .fontWeight(.bold)
+                            .foregroundColor(engine.currentURL.contains("lichess") ? .white : .gray)
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 8)
+                            .background(engine.currentURL.contains("lichess") ? Color.green : Color.clear)
+                            .cornerRadius(8)
+                    }
+                }
+                .padding(.top, 50) // Push below notch
+                .padding(.horizontal)
+                .background(Color.black.opacity(0.8))
+                
+                // The Web Browser
+                ChessWebView(engine: engine)
+                    .ignoresSafeArea(edges: .bottom)
+            }
             
             // Left Side Eval Bar
             VStack {
                 EvalBar(score: engine.currentScore)
-                    .frame(width: 12, height: 200)
+                    .frame(width: 12, height: 150)
                     .cornerRadius(6)
                     .padding(.leading, 5)
+                    .padding(.top, 100)
                 Spacer()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -140,20 +155,14 @@ struct ContentView: View {
                     Spacer()
                     
                     HStack {
-                        Text(engine.openingName)
+                        Text(engine.activeColor == "white" ? "Playing: White" : (engine.activeColor == "black" ? "Playing: Black" : "Detecting..."))
                             .font(.caption2)
                             .foregroundColor(.gray)
-                            .lineLimit(1)
                         Spacer()
                         Button(action: { engine.forceToggleColor() }) {
-                            Text(engine.activeColor.capitalized)
-                                .fontWeight(.bold)
-                                .font(.caption)
-                                .foregroundColor(.black)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 2)
-                                .background(engine.activeColor == "white" ? Color.white : Color.black)
-                                .cornerRadius(4)
+                            Image(systemName: "arrow.up.arrow.down.circle.fill")
+                                .foregroundColor(.blue)
+                                .font(.title3)
                         }
                     }
                     .padding(.horizontal)
@@ -166,7 +175,7 @@ struct ContentView: View {
                 }
             }
             
-            // FIX: Draggable & Tappable Hidden Button
+            // Draggable & Tappable Hidden Button
             Image(systemName: showEngine ? "eye.slash.circle.fill" : "eye.circle.fill")
                 .font(.system(size: 44))
                 .foregroundColor(.blue)
@@ -175,18 +184,13 @@ struct ContentView: View {
                 .gesture(
                     DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            // Only register as drag if moved more than 5 pixels
                             if abs(value.translation.width) > 5 || abs(value.translation.height) > 5 {
                                 isDragging = true
-                                buttonPosition = CGSize(
-                                    width: lastOffset.width + value.translation.width,
-                                    height: lastOffset.height + value.translation.height
-                                )
+                                buttonPosition = CGSize(width: lastOffset.width + value.translation.width, height: lastOffset.height + value.translation.height)
                             }
                         }
                         .onEnded { value in
                             if !isDragging {
-                                // It was a tap, not a drag
                                 withAnimation(.spring()) { showEngine.toggle() }
                             }
                             lastOffset = buttonPosition
@@ -247,18 +251,31 @@ class LiveEngine: ObservableObject {
     @Published var isThinking: Bool = false
     @Published var detectedColor: String = "unknown"
     @Published var manualOverride: String? = nil
-    @Published var openingName: String = "Unknown Opening"
     @Published var currentScore: Double = 0.0
     @Published var isBlunder: Bool = false
+    @Published var currentURL: String = "https://www.chess.com/play/computer"
     
     var activeColor: String { return manualOverride ?? detectedColor }
     private var lastScore: Double = 0.0
     
+    func switchToChessCom() {
+        currentURL = "https://www.chess.com/play/computer"
+        objectWillChange.send()
+    }
+    
+    func switchToLichess() {
+        currentURL = "https://lichess.org/analysis"
+        objectWillChange.send()
+    }
+    
     func updateDetectedColor(_ color: String) {
         if detectedColor != color { detectedColor = color; analyzeCurrentPosition() }
     }
-    func updateOpening(_ name: String) { openingName = name }
-    func forceToggleColor() { manualOverride = (activeColor == "white") ? "black" : "white"; analyzeCurrentPosition() }
+    
+    func forceToggleColor() {
+        manualOverride = (activeColor == "white") ? "black" : "white"
+        analyzeCurrentPosition()
+    }
     
     func analyzeCurrentPosition() {
         isThinking = true
@@ -279,6 +296,7 @@ class LiveEngine: ObservableObject {
             self.isThinking = false
         }
     }
+    
     func getMoves() -> [String] {
         if activeColor == "black" {
             return topMoves.map { move in move.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "-0.", with: "+0.") }
