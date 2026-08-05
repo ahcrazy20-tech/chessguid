@@ -22,7 +22,7 @@ struct ChessWebView: UIViewRepresentable {
         """
         userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
-        // NUCLEAR OPTION SCANNER
+        // DEEP SEARCH SCANNER (Image Source + Debug Mode)
         let scannerScript = """
         var _lastFen = "";
         
@@ -36,50 +36,38 @@ struct ChessWebView: UIViewRepresentable {
                 
                 for (var rank = 0; rank < 8; rank++) {
                     var emptyCount = 0;
-                    
                     for (var file = 0; file < 8; file++) {
                         var actualRank = isBlack ? (7 - rank) : rank;
                         var actualFile = isBlack ? (7 - file) : file;
                         var squareIndex = actualRank * 8 + actualFile;
                         
-                        var square = board.querySelector('.square-' + squareIndex);
+                        // Try multiple ways to find the square
+                        var square = board.querySelector('.square-' + squareIndex) || 
+                                     board.querySelector('[data-square="' + squareIndex + '"]');
+                        
                         var pieceType = null;
                         var isWhite = false;
                         
                         if (square) {
-                            // STRATEGY 1: Standard .piece class
-                            var piece = square.querySelector('.piece');
-                            
-                            // STRATEGY 2: Img tag
-                            if (!piece) piece = square.querySelector('img');
-                            
-                            // STRATEGY 3: SVG tag
-                            if (!piece) piece = square.querySelector('svg');
-                            
-                            // STRATEGY 4: Any element with 'piece' in class
-                            if (!piece) {
-                                var all = square.querySelectorAll('*');
-                                for (var i=0; i<all.length; i++) {
-                                    if ((all[i].className || '').toLowerCase().includes('piece')) {
-                                        piece = all[i];
-                                        break;
-                                    }
-                                }
-                            }
-                            
-                            if (piece) {
-                                var cls = (piece.className || '').toLowerCase();
-                                var alt = (piece.alt || '').toLowerCase();
-                                var src = (piece.src || '').toLowerCase();
-                                var combined = cls + ' ' + alt + ' ' + src;
+                            // Look for ANY image in the square
+                            var img = square.querySelector('img');
+                            if (img && img.src) {
+                                var src = img.src.toLowerCase();
                                 
-                                isWhite = combined.includes('white');
-                                if (combined.includes('knight')) pieceType = 'n';
-                                else if (combined.includes('bishop')) pieceType = 'b';
-                                else if (combined.includes('rook')) pieceType = 'r';
-                                else if (combined.includes('queen')) pieceType = 'q';
-                                else if (combined.includes('king')) pieceType = 'k';
-                                else if (combined.includes('pawn')) pieceType = 'p';
+                                // Check image source for piece codes (Chess.com standard)
+                                if (src.includes('wp') || src.includes('white-pawn') || src.includes('wpng')) { pieceType = 'p'; isWhite = true; }
+                                else if (src.includes('wn') || src.includes('white-knight')) { pieceType = 'n'; isWhite = true; }
+                                else if (src.includes('wb') || src.includes('white-bishop')) { pieceType = 'b'; isWhite = true; }
+                                else if (src.includes('wr') || src.includes('white-rook')) { pieceType = 'r'; isWhite = true; }
+                                else if (src.includes('wq') || src.includes('white-queen')) { pieceType = 'q'; isWhite = true; }
+                                else if (src.includes('wk') || src.includes('white-king')) { pieceType = 'k'; isWhite = true; }
+                                
+                                else if (src.includes('bp') || src.includes('black-pawn')) { pieceType = 'p'; isWhite = false; }
+                                else if (src.includes('bn') || src.includes('black-knight')) { pieceType = 'n'; isWhite = false; }
+                                else if (src.includes('bb') || src.includes('black-bishop')) { pieceType = 'b'; isWhite = false; }
+                                else if (src.includes('br') || src.includes('black-rook')) { pieceType = 'r'; isWhite = false; }
+                                else if (src.includes('bq') || src.includes('black-queen')) { pieceType = 'q'; isWhite = false; }
+                                else if (src.includes('bk') || src.includes('black-king')) { pieceType = 'k'; isWhite = false; }
                             }
                         }
                         
@@ -90,23 +78,23 @@ struct ChessWebView: UIViewRepresentable {
                             emptyCount++;
                         }
                     }
-                    
                     if (emptyCount > 0) fen += emptyCount;
                     if (rank < 7) fen += '/';
                 }
-                
-                var turn = 'w';
-                fen += ' ' + turn + ' - - 0 1';
-                return fen;
-            } catch(e) {
-                return null;
-            }
+                return fen + " w - - 0 1";
+            } catch(e) { return null; }
+        }
+        
+        function getDebugHTML() {
+            try {
+                var board = document.querySelector('.board');
+                return board ? board.innerHTML.substring(0, 2000) : "No board found";
+            } catch(e) { return "Error: " + e.message; }
         }
         
         function stealthScan() {
             var delay = Math.floor(Math.random() * 3000) + 2000;
             setTimeout(stealthScan, delay);
-            
             try {
                 var fen = getFEN();
                 if (fen && fen.length > 10 && fen !== _lastFen) {
@@ -115,11 +103,11 @@ struct ChessWebView: UIViewRepresentable {
                 }
             } catch(e) {}
         }
-        
         setTimeout(stealthScan, 2000);
         """
         userContentController.addUserScript(WKUserScript(source: scannerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         userContentController.add(context.coordinator, name: "fenDetector")
+        userContentController.add(context.coordinator, name: "debugHTML")
         config.userContentController = userContentController
         
         let webview = WKWebView(frame: .zero, configuration: config)
@@ -147,6 +135,10 @@ struct ChessWebView: UIViewRepresentable {
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
             if message.name == "fenDetector", let fen = message.body as? String {
                 engine.analyzeFEN(fen)
+            } else if message.name == "debugHTML", let html = message.body as? String {
+                DispatchQueue.main.async {
+                    engine.debugHTML = html
+                }
             }
         }
     }
@@ -160,6 +152,7 @@ struct ContentView: View {
     @State private var isDragging = false
     @State private var manualFEN: String = ""
     @State private var showManualInput = false
+    @State private var showDebug = false
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -168,18 +161,25 @@ struct ContentView: View {
                     Button(action: { engine.currentURL = "https://www.chess.com/play/computer" }) {
                         Text("Play").fontWeight(.bold)
                             .foregroundColor(engine.currentURL.contains("chess.com") ? .white : .gray)
-                            .padding(.horizontal, 15).padding(.vertical, 8)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(engine.currentURL.contains("chess.com") ? Color.blue : Color.clear).cornerRadius(8)
                     }
                     Spacer()
                     Button(action: { engine.currentURL = "https://lichess.org/analysis" }) {
                         Text("Lichess").fontWeight(.bold)
                             .foregroundColor(engine.currentURL.contains("lichess") ? .white : .gray)
-                            .padding(.horizontal, 15).padding(.vertical, 8)
+                            .padding(.horizontal, 10).padding(.vertical, 6)
                             .background(engine.currentURL.contains("lichess") ? Color.green : Color.clear).cornerRadius(8)
                     }
                     Button(action: { showManualInput.toggle() }) {
-                        Image(systemName: "keyboard").foregroundColor(.yellow).font(.title2)
+                        Image(systemName: "keyboard").foregroundColor(.yellow).font(.title3)
+                    }
+                    // NEW DEBUG BUTTON
+                    Button(action: { 
+                        showDebug = true
+                        engine.runDebugScan()
+                    }) {
+                        Image(systemName: "ladybug.fill").foregroundColor(.red).font(.title3)
                     }
                 }
                 .padding(.top, 50).padding(.horizontal).background(Color.black.opacity(0.8))
@@ -193,14 +193,9 @@ struct ContentView: View {
                     
                     if showManualInput {
                         HStack {
-                            TextField("Paste FEN here...", text: $manualFEN)
-                                .textFieldStyle(.roundedBorder)
-                                .autocapitalization(.none)
-                                .font(.caption)
-                            Button(action: {
-                                engine.analyzeFEN(manualFEN)
-                                showManualInput = false
-                            }) {
+                            TextField("Paste FEN...", text: $manualFEN)
+                                .textFieldStyle(.roundedBorder).font(.caption)
+                            Button(action: { engine.analyzeFEN(manualFEN); showManualInput = false }) {
                                 Image(systemName: "cpu.fill").foregroundColor(.green).font(.title2)
                             }
                         }
@@ -220,6 +215,42 @@ struct ContentView: View {
                     EnginePanel(moves: engine.topMoves, isThinking: engine.isThinking, lastFEN: engine.lastFEN)
                         .padding(.horizontal).padding(.bottom, 40)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            
+            // Debug HTML Overlay
+            if showDebug {
+                ZStack {
+                    Color.black.opacity(0.9).ignoresSafeArea()
+                    VStack {
+                        HStack {
+                            Text("DEBUG HTML (Copy this if scanner fails)")
+                                .foregroundColor(.white).font(.headline)
+                            Spacer()
+                            Button(action: { showDebug = false }) {
+                                Image(systemName: "xmark.circle.fill").foregroundColor(.red).font(.title)
+                            }
+                        }
+                        .padding()
+                        
+                        ScrollView {
+                            Text(engine.debugHTML)
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(.green)
+                                .padding()
+                        }
+                        
+                        Button(action: {
+                            UIPasteboard.general.string = engine.debugHTML
+                        }) {
+                            Text("Copy to Clipboard")
+                                .foregroundColor(.black)
+                                .padding()
+                                .background(Color.white)
+                                .cornerRadius(10)
+                        }
+                        .padding(.bottom, 50)
+                    }
                 }
             }
             
@@ -252,14 +283,12 @@ struct EnginePanel: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Image(systemName: "lock.shield.fill").foregroundColor(.green)
-                Text(isThinking ? "  Analyzing Position..." : "  Top 3 Best Moves").font(.headline).foregroundColor(.white)
+                Text(isThinking ? "  Analyzing..." : "  Top 3 Moves").font(.headline).foregroundColor(.white)
                 Spacer()
             }
             Divider().background(Color.white.opacity(0.3))
-            
             if moves.isEmpty || moves[0].contains("Waiting") {
-                Text("Waiting for position...")
-                    .foregroundColor(.gray).font(.caption).padding(.vertical, 4)
+                Text("Waiting for position...").foregroundColor(.gray).font(.caption).padding(.vertical, 4)
             } else {
                 ForEach(Array(moves.enumerated()), id: \.offset) { index, move in
                     HStack {
@@ -273,12 +302,9 @@ struct EnginePanel: View {
                     .background(Color.white.opacity(0.1)).cornerRadius(6)
                 }
             }
-            
             if !lastFEN.isEmpty {
                 Text("FEN: \(lastFEN)")
-                    .font(.system(size: 8, design: .monospaced))
-                    .foregroundColor(.gray)
-                    .lineLimit(2)
+                    .font(.system(size: 8, design: .monospaced)).foregroundColor(.gray).lineLimit(2)
             }
         }
         .padding().background(Color.black.opacity(0.90)).cornerRadius(20)
@@ -292,13 +318,18 @@ class LiveEngine: ObservableObject {
     @Published var currentURL: String = "https://www.chess.com/play/computer"
     @Published var lastFEN: String = ""
     @Published var scanCount: Int = 0
+    @Published var debugHTML: String = "Tap the red bug icon to scan HTML..."
     
     private var lastAnalyzedFen: String = ""
+    private var webViewForDebug: WKWebView?
+    
+    func runDebugScan() {
+        // This will be triggered by the WebView coordinator
+    }
     
     func analyzeFEN(_ fen: String) {
         scanCount += 1
         lastFEN = fen
-        
         if fen == lastAnalyzedFen { return }
         lastAnalyzedFen = fen
         
@@ -309,7 +340,6 @@ class LiveEngine: ObservableObject {
         }
         
         isThinking = true
-        
         DispatchQueue.global(qos: .userInitiated).async {
             let search = SearchV2(maxNodes: 100_000, timeLimit: 2.0)
             let results = search.topMoves(board, count: 3, maxDepth: 6)
