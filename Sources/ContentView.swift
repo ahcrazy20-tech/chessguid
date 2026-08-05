@@ -8,14 +8,16 @@ struct ChessWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         
-        // FIX: Use a persistent data store so bots can load (don't wipe cookies every time)
+        // FIX: Use a persistent data store so bots can load
         config.websiteDataStore = WKWebsiteDataStore.default()
         
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.defaultWebpagePreferences.preferredContentMode = .mobile
         config.defaultWebpagePreferences.allowsContentJavaScript = true
-        config.javaScriptCanOpenWindowsAutomatically = true
+        
+        // FIX: The typo was here. It belongs in .preferences
+        config.preferences.javaScriptCanOpenWindowsAutomatically = true
         
         let userContentController = WKUserContentController()
         
