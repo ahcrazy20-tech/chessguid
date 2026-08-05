@@ -1,70 +1,66 @@
 import SwiftUI
 import WebKit
 
-// 1. The Deep Stealth Chess.com Web Browser
+// 1. The WebView with Real Stockfish JS Injection
 struct ChessWebView: UIViewRepresentable {
     @ObservedObject var engine: LiveEngine
     
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        
-        // FIX: Use a persistent data store so bots can load
         config.websiteDataStore = WKWebsiteDataStore.default()
-        
         config.allowsInlineMediaPlayback = true
-        config.mediaTypesRequiringUserActionForPlayback = []
         config.defaultWebpagePreferences.preferredContentMode = .mobile
-        config.defaultWebpagePreferences.allowsContentJavaScript = true
-        
-        // FIX: The typo was here. It belongs in .preferences
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
         
         let userContentController = WKUserContentController()
         
-        // STEALTH & UI FIX: Anti-Fingerprinting + Fix Top Bar Visibility
-        let stealthAndFixScript = """
-        // Anti-Fingerprinting
-        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+        // INJECT REAL STOCKFISH ENGINE (WebAssembly)
+        let stockfishInjection = """
+        // Load Stockfish.js from CDN
+        var script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.0/stockfish.js';
+        document.head.appendChild(script);
         
-        // FIX: Push content down so the "X" button and top bar are visible under the notch
-        document.body.style.paddingTop = '60px';
-        document.body.style.backgroundColor = '#262421'; // Match chess.com dark theme
+        script.onload = function() {
+            // Initialize the Web Worker
+            var engine = new Worker(script.src);
+            engine.postMessage('uci');
+            engine.postMessage('setoption name MultiPV value 3');
+            
+            engine.onmessage = function(event) {
+                var line = event.data;
+                // Only send relevant analysis lines back to Swift
+                if (line.startsWith('info') && line.includes('pv') && line.includes('multipv')) {
+                    window.webkit.messageHandlers.engineOutput.postMessage(line);
+                }
+            };
+            
+            // Expose function to Swift to trigger analysis
+            window.analyzeFEN = function(fen) {
+                engine.postMessage('position fen ' + fen);
+                engine.postMessage('go depth 15');
+            };
+        };
         
-        // Disable Zoom and Text Selection (Stealth)
-        document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
-        document.body.style.userSelect = 'none';
-        """
-        userContentController.addUserScript(WKUserScript(source: stealthAndFixScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-        
-        // Auto-Detect Color
-        let detectionScript = """
-        function detectAndReport() {
-            let color = 'unknown';
-            const board = document.querySelector('.board');
-            if (board) {
-                if (board.classList.contains('orientation-white')) color = 'white';
-                else if (board.classList.contains('orientation-black')) color = 'black';
+        // Monitor Lichess URL for FEN changes (Format: /analysis/[fen])
+        setInterval(function() {
+            var path = window.location.pathname;
+            if (path.startsWith('/analysis/')) {
+                var fen = path.replace('/analysis/', '').replace(/_/g, ' ');
+                if (window.lastFen !== fen && window.analyzeFEN) {
+                    window.lastFen = fen;
+                    window.analyzeFEN(fen);
+                }
             }
-            if (color !== 'unknown') {
-                window.webkit.messageHandlers.boardState.postMessage(color);
-            }
-            setTimeout(detectAndReport, 5000);
-        }
-        setTimeout(detectAndReport, 2000);
+        }, 1000);
         """
-        userContentController.addUserScript(WKUserScript(source: detectionScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-        userContentController.add(context.coordinator, name: "boardState")
+        userContentController.addUserScript(WKUserScript(source: stockfishInjection, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        userContentController.add(context.coordinator, name: "engineOutput")
         config.userContentController = userContentController
         
         let webview = WKWebView(frame: .zero, configuration: config)
         webview.backgroundColor = UIColor(red: 38/255, green: 36/255, blue: 33/255, alpha: 1.0)
-        webview.isOpaque = true
         webview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        webview.allowsBackForwardNavigationGestures = true
-        
-        // Perfect Safari User-Agent
-        webview.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Mobile/15E148 Safari/604.1"
         
         let url = URL(string: engine.currentURL)!
         webview.load(URLRequest(url: url))
@@ -74,7 +70,6 @@ struct ChessWebView: UIViewRepresentable {
     
     func updateUIView(_ uiView: WKWebView, context: Context) {
         uiView.frame = UIScreen.main.bounds
-        // If URL changed, reload
         if let currentURL = uiView.url, currentURL.absoluteString != engine.currentURL {
             uiView.load(URLRequest(url: URL(string: engine.currentURL)!))
         }
@@ -89,8 +84,8 @@ struct ChessWebView: UIViewRepresentable {
         init(engine: LiveEngine) { self.engine = engine }
         
         func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            if message.name == "boardState", let color = message.body as? String {
-                engine.updateDetectedColor(color)
+            if message.name == "engineOutput", let line = message.body as? String {
+                engine.parseUCIOutput(line)
             }
         }
     }
@@ -107,7 +102,7 @@ struct ContentView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
-                // Top Navigation Bar (Fixes the missing "X" button issue)
+                // Top Navigation Bar
                 HStack {
                     Button(action: { engine.switchToChessCom() }) {
                         Text("Play")
@@ -118,9 +113,7 @@ struct ContentView: View {
                             .background(engine.currentURL.contains("chess.com") ? Color.blue : Color.clear)
                             .cornerRadius(8)
                     }
-                    
                     Spacer()
-                    
                     Button(action: { engine.switchToLichess() }) {
                         Text("Real Engine")
                             .fontWeight(.bold)
@@ -131,16 +124,15 @@ struct ContentView: View {
                             .cornerRadius(8)
                     }
                 }
-                .padding(.top, 50) // Push below notch
+                .padding(.top, 50)
                 .padding(.horizontal)
                 .background(Color.black.opacity(0.8))
                 
-                // The Web Browser
                 ChessWebView(engine: engine)
                     .ignoresSafeArea(edges: .bottom)
             }
             
-            // Left Side Eval Bar
+            // Eval Bar
             VStack {
                 EvalBar(score: engine.currentScore)
                     .frame(width: 12, height: 150)
@@ -155,29 +147,23 @@ struct ContentView: View {
             if showEngine {
                 VStack {
                     Spacer()
-                    
                     HStack {
-                        Text(engine.activeColor == "white" ? "Playing: White" : (engine.activeColor == "black" ? "Playing: Black" : "Detecting..."))
+                        Text(engine.currentURL.contains("lichess") ? "Live Stockfish Analysis" : "Tap 'Real Engine' to analyze")
                             .font(.caption2)
-                            .foregroundColor(.gray)
+                            .foregroundColor(engine.currentURL.contains("lichess") ? .green : .gray)
                         Spacer()
-                        Button(action: { engine.forceToggleColor() }) {
-                            Image(systemName: "arrow.up.arrow.down.circle.fill")
-                                .foregroundColor(.blue)
-                                .font(.title3)
-                        }
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 2)
                     
-                    EnginePanel(moves: engine.getMoves(), isThinking: engine.isThinking, isBlunder: engine.isBlunder)
+                    EnginePanel(moves: engine.topMoves, isThinking: engine.isThinking)
                         .padding(.horizontal)
                         .padding(.bottom, 40)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             
-            // Draggable & Tappable Hidden Button
+            // Draggable Button
             Image(systemName: showEngine ? "eye.slash.circle.fill" : "eye.circle.fill")
                 .font(.system(size: 44))
                 .foregroundColor(.blue)
@@ -192,9 +178,7 @@ struct ContentView: View {
                             }
                         }
                         .onEnded { value in
-                            if !isDragging {
-                                withAnimation(.spring()) { showEngine.toggle() }
-                            }
+                            if !isDragging { withAnimation(.spring()) { showEngine.toggle() } }
                             lastOffset = buttonPosition
                             isDragging = false
                         }
@@ -222,15 +206,12 @@ struct EvalBar: View {
 struct EnginePanel: View {
     let moves: [String]
     let isThinking: Bool
-    let isBlunder: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: isBlunder ? "exclamationmark.triangle.fill" : "lock.shield.fill")
-                    .foregroundColor(isBlunder ? .red : .green)
-                Text(isThinking ? "  Analyzing..." : (isBlunder ? "  BLUNDER DETECTED!" : "  Top 3 Moves"))
-                    .font(.headline)
-                    .foregroundColor(isBlunder ? .red : .white)
+                Image(systemName: "cpu.fill").foregroundColor(.green)
+                Text(isThinking ? "  Calculating..." : "  Top 3 Engine Moves")
+                    .font(.headline).foregroundColor(.white)
                 Spacer()
             }
             Divider().background(Color.white.opacity(0.3))
@@ -243,66 +224,71 @@ struct EnginePanel: View {
                 .padding(.vertical, 4).padding(.horizontal, 8).background(Color.white.opacity(0.1)).cornerRadius(6)
             }
         }
-        .padding().background(Color.black.opacity(0.90)).cornerRadius(20).shadow(color: isBlunder ? .red.opacity(0.5) : .black.opacity(0.5), radius: 15, x: 0, y: 10)
+        .padding().background(Color.black.opacity(0.90)).cornerRadius(20).shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10)
     }
 }
 
-// 4. The Live Engine Logic
+// 4. The Live Engine Logic (Real UCI Parser)
 class LiveEngine: ObservableObject {
-    @Published var topMoves: [String] = ["Waiting for board..."]
+    @Published var topMoves: [String] = ["Waiting for position..."]
     @Published var isThinking: Bool = false
-    @Published var detectedColor: String = "unknown"
-    @Published var manualOverride: String? = nil
     @Published var currentScore: Double = 0.0
-    @Published var isBlunder: Bool = false
     @Published var currentURL: String = "https://www.chess.com/play/computer"
     
-    var activeColor: String { return manualOverride ?? detectedColor }
-    private var lastScore: Double = 0.0
+    private var parsedMoves: [Int: (move: String, score: String)] = [:]
     
     func switchToChessCom() {
         currentURL = "https://www.chess.com/play/computer"
+        topMoves = ["Switch to Real Engine to analyze"]
         objectWillChange.send()
     }
     
     func switchToLichess() {
         currentURL = "https://lichess.org/analysis"
+        topMoves = ["Waiting for position..."]
         objectWillChange.send()
     }
     
-    func updateDetectedColor(_ color: String) {
-        if detectedColor != color { detectedColor = color; analyzeCurrentPosition() }
-    }
-    
-    func forceToggleColor() {
-        manualOverride = (activeColor == "white") ? "black" : "white"
-        analyzeCurrentPosition()
-    }
-    
-    func analyzeCurrentPosition() {
+    // Parse real Stockfish UCI output
+    func parseUCIOutput(_ line: String) {
         isThinking = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            let newScore = Double.random(in: -2.0...2.0)
-            self.currentScore = newScore
-            if abs(newScore - self.lastScore) > 1.5 {
-                self.isBlunder = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { self.isBlunder = false }
-            } else { self.isBlunder = false }
-            self.lastScore = newScore
-            let rawMoves = [
-                "e2-e4  (Score: +\(String(format: "%.1f", newScore)))",
-                "d2-d4  (Score: +\(String(format: "%.1f", newScore - 0.1)))",
-                "Ng1-f3 (Score: +\(String(format: "%.1f", newScore - 0.2)))"
-            ]
-            self.topMoves = rawMoves
-            self.isThinking = false
+        let parts = line.split(separator: " ")
+        
+        guard let multipvIndex = parts.firstIndex(of: "multipv"),
+              let pvIndex = parts.firstIndex(of: "pv") else { return }
+        
+        let rank = Int(parts[multipvIndex + 1]) ?? 0
+        let pv = parts[(pvIndex + 1)...].joined(separator: " ")
+        let bestMove = pv.split(separator: " ").first.map(String.init) ?? ""
+        
+        var scoreStr = "0.0"
+        if let cpIndex = parts.firstIndex(of: "cp") {
+            let cp = Int(parts[cpIndex + 1]) ?? 0
+            scoreStr = String(format: "%+.1f", Double(cp) / 100.0)
+            if rank == 1 { currentScore = Double(cp) / 100.0 }
+        } else if let mateIndex = parts.firstIndex(of: "mate") {
+            let mate = Int(parts[mateIndex + 1]) ?? 0
+            scoreStr = mate > 0 ? "M\(mate)" : "-M\(abs(mate))"
+            if rank == 1 { currentScore = mate > 0 ? 10.0 : -10.0 }
         }
-    }
-    
-    func getMoves() -> [String] {
-        if activeColor == "black" {
-            return topMoves.map { move in move.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "-0.", with: "+0.") }
+        
+        parsedMoves[rank] = (move: bestMove, score: scoreStr)
+        
+        // Update UI with top 3 moves
+        var newMoves: [String] = []
+        for i in 1...3 {
+            if let data = parsedMoves[i] {
+                // Format move like e2e4 to e2-e4
+                let formattedMove = data.move.count == 4 ? "\(data.move.prefix(2))-\(data.move.suffix(2))" : data.move
+                newMoves.append("\(formattedMove)  (Score: \(data.score))")
+            }
         }
-        return topMoves
+        
+        if !newMoves.isEmpty {
+            DispatchQueue.main.async {
+                self.topMoves = newMoves
+                self.isThinking = false
+            }
+        }
     }
 }
