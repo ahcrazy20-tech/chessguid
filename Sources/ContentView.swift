@@ -23,10 +23,9 @@ struct ChessWebView: UIViewRepresentable {
         """
         userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
-        // Improved Scanner Script
+        // BULLETPROOF Scanner Script using IMG ALT text
         let scannerScript = """
         var _lastFen = "";
-        var _scanCount = 0;
         
         function getFEN() {
             try {
@@ -44,33 +43,28 @@ struct ChessWebView: UIViewRepresentable {
                         var actualFile = isBlack ? (7 - file) : file;
                         var squareIndex = actualRank * 8 + actualFile;
                         
-                        var square = board.querySelector('[data-square="' + squareIndex + '"]') || 
-                                    board.querySelector('.square-' + squareIndex);
+                        // Chess.com often puts the square class directly on the IMG tag
+                        var img = board.querySelector('img.square-' + squareIndex) || 
+                                  board.querySelector('[data-square="' + squareIndex + '"] img') ||
+                                  board.querySelector('.square-' + squareIndex + ' img');
                         
-                        if (square) {
-                            var piece = square.querySelector('.piece') || 
-                                       square.querySelector('[class*="piece"]');
+                        if (img) {
+                            if (emptyCount > 0) { fen += emptyCount; emptyCount = 0; }
                             
-                            if (piece) {
-                                if (emptyCount > 0) {
-                                    fen += emptyCount;
-                                    emptyCount = 0;
-                                }
-                                
-                                var pieceClass = piece.className || piece.getAttribute('class') || '';
-                                var isWhite = pieceClass.includes('white') || pieceClass.includes('White');
-                                var pieceType = 'p';
-                                
-                                if (pieceClass.includes('knight') || pieceClass.includes('Knight')) pieceType = 'n';
-                                else if (pieceClass.includes('bishop') || pieceClass.includes('Bishop')) pieceType = 'b';
-                                else if (pieceClass.includes('rook') || pieceClass.includes('Rook')) pieceType = 'r';
-                                else if (pieceClass.includes('queen') || pieceClass.includes('Queen')) pieceType = 'q';
-                                else if (pieceClass.includes('king') || pieceClass.includes('King')) pieceType = 'k';
-                                
-                                fen += isWhite ? pieceType.toUpperCase() : pieceType.toLowerCase();
-                            } else {
-                                emptyCount++;
-                            }
+                            // Use ALT text for 100% reliability
+                            var alt = img.getAttribute('alt') || img.className || '';
+                            var lowerAlt = alt.toLowerCase();
+                            
+                            var isWhite = lowerAlt.includes('white');
+                            var pieceType = 'p';
+                            
+                            if (lowerAlt.includes('knight')) pieceType = 'n';
+                            else if (lowerAlt.includes('bishop')) pieceType = 'b';
+                            else if (lowerAlt.includes('rook')) pieceType = 'r';
+                            else if (lowerAlt.includes('queen')) pieceType = 'q';
+                            else if (lowerAlt.includes('king')) pieceType = 'k';
+                            
+                            fen += isWhite ? pieceType.toUpperCase() : pieceType.toLowerCase();
                         } else {
                             emptyCount++;
                         }
@@ -80,9 +74,15 @@ struct ChessWebView: UIViewRepresentable {
                     if (rank < 7) fen += '/';
                 }
                 
+                // Detect turn
                 var turn = 'w';
-                fen += ' ' + turn + ' - - 0 1';
+                if (document.body.classList.contains('black-to-move') || 
+                    board.classList.contains('black-to-move') ||
+                    document.querySelector('.black-to-move')) {
+                    turn = 'b';
+                }
                 
+                fen += ' ' + turn + ' - - 0 1';
                 return fen;
             } catch(e) {
                 return null;
@@ -90,20 +90,19 @@ struct ChessWebView: UIViewRepresentable {
         }
         
         function stealthScan() {
-            var delay = Math.floor(Math.random() * 3000) + 3000;
+            var delay = Math.floor(Math.random() * 3000) + 2000;
             setTimeout(stealthScan, delay);
             
             try {
                 var fen = getFEN();
                 if (fen && fen.length > 10 && fen !== _lastFen) {
                     _lastFen = fen;
-                    _scanCount++;
                     window.webkit.messageHandlers.fenDetector.postMessage(fen);
                 }
             } catch(e) {}
         }
         
-        setTimeout(stealthScan, 3000);
+        setTimeout(stealthScan, 2000);
         """
         userContentController.addUserScript(WKUserScript(source: scannerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         userContentController.add(context.coordinator, name: "fenDetector")
@@ -114,14 +113,12 @@ struct ChessWebView: UIViewRepresentable {
         webview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webview.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Mobile/15E148 Safari/604.1"
         
-        // Load the initial URL
         let url = URL(string: engine.currentURL)!
         webview.load(URLRequest(url: url))
         return webview
     }
     
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        // FIXED: Only update frame, don't force reload
         uiView.frame = UIScreen.main.bounds
     }
     
@@ -154,19 +151,14 @@ struct ContentView: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 HStack {
-                    Button(action: { 
-                        engine.currentURL = "https://www.chess.com/play/computer"
-                        // Note: This will only work on next app launch or if we add a reload mechanism
-                    }) {
+                    Button(action: { engine.currentURL = "https://www.chess.com/play/computer" }) {
                         Text("Play").fontWeight(.bold)
                             .foregroundColor(engine.currentURL.contains("chess.com") ? .white : .gray)
                             .padding(.horizontal, 15).padding(.vertical, 8)
                             .background(engine.currentURL.contains("chess.com") ? Color.blue : Color.clear).cornerRadius(8)
                     }
                     Spacer()
-                    Button(action: { 
-                        engine.currentURL = "https://lichess.org/analysis"
-                    }) {
+                    Button(action: { engine.currentURL = "https://lichess.org/analysis" }) {
                         Text("Lichess").fontWeight(.bold)
                             .foregroundColor(engine.currentURL.contains("lichess") ? .white : .gray)
                             .padding(.horizontal, 15).padding(.vertical, 8)
@@ -191,7 +183,6 @@ struct ContentView: View {
                                 .textFieldStyle(.roundedBorder)
                                 .autocapitalization(.none)
                                 .font(.caption)
-                            
                             Button(action: {
                                 engine.analyzeFEN(manualFEN)
                                 showManualInput = false
@@ -199,8 +190,7 @@ struct ContentView: View {
                                 Image(systemName: "cpu.fill").foregroundColor(.green).font(.title2)
                             }
                         }
-                        .padding(.horizontal)
-                        .padding(.bottom, 5)
+                        .padding(.horizontal).padding(.bottom, 5)
                     }
                     
                     HStack {
@@ -211,8 +201,7 @@ struct ContentView: View {
                         Text("Scans: \(engine.scanCount)")
                             .font(.caption2).foregroundColor(.gray)
                     }
-                    .padding(.horizontal)
-                    .padding(.bottom, 2)
+                    .padding(.horizontal).padding(.bottom, 2)
                     
                     EnginePanel(moves: engine.topMoves, isThinking: engine.isThinking, lastFEN: engine.lastFEN)
                         .padding(.horizontal).padding(.bottom, 40)
@@ -254,11 +243,9 @@ struct EnginePanel: View {
             }
             Divider().background(Color.white.opacity(0.3))
             
-            if moves.isEmpty || moves[0] == "Waiting for board..." {
+            if moves.isEmpty || moves[0].contains("Waiting") {
                 Text("Waiting for position...")
-                    .foregroundColor(.gray)
-                    .font(.caption)
-                    .padding(.vertical, 4)
+                    .foregroundColor(.gray).font(.caption).padding(.vertical, 4)
             } else {
                 ForEach(Array(moves.enumerated()), id: \.offset) { index, move in
                     HStack {
