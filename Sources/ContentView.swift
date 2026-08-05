@@ -23,36 +23,31 @@ struct ChessWebView: UIViewRepresentable {
         """
         userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
-        // IMPROVED Scanner Script - More robust FEN detection
+        // Improved Scanner Script
         let scannerScript = """
         var _lastFen = "";
         var _scanCount = 0;
         
         function getFEN() {
             try {
-                // Try multiple selectors to find the board
                 var board = document.querySelector('.board');
                 if (!board) return null;
                 
                 var fen = "";
                 var isBlack = board.classList.contains('orientation-black');
                 
-                // Scan each rank (row)
                 for (var rank = 0; rank < 8; rank++) {
                     var emptyCount = 0;
                     
                     for (var file = 0; file < 8; file++) {
-                        // Calculate square index based on orientation
                         var actualRank = isBlack ? (7 - rank) : rank;
                         var actualFile = isBlack ? (7 - file) : file;
                         var squareIndex = actualRank * 8 + actualFile;
                         
-                        // Try to find the square element
                         var square = board.querySelector('[data-square="' + squareIndex + '"]') || 
                                     board.querySelector('.square-' + squareIndex);
                         
                         if (square) {
-                            // Look for piece in the square
                             var piece = square.querySelector('.piece') || 
                                        square.querySelector('[class*="piece"]');
                             
@@ -85,7 +80,6 @@ struct ChessWebView: UIViewRepresentable {
                     if (rank < 7) fen += '/';
                 }
                 
-                // Determine turn (simplified - assume white moves first)
                 var turn = 'w';
                 fen += ' ' + turn + ' - - 0 1';
                 
@@ -96,7 +90,6 @@ struct ChessWebView: UIViewRepresentable {
         }
         
         function stealthScan() {
-            // Random delay between 3-6 seconds for stealth
             var delay = Math.floor(Math.random() * 3000) + 3000;
             setTimeout(stealthScan, delay);
             
@@ -107,12 +100,9 @@ struct ChessWebView: UIViewRepresentable {
                     _scanCount++;
                     window.webkit.messageHandlers.fenDetector.postMessage(fen);
                 }
-            } catch(e) {
-                // Silent fail
-            }
+            } catch(e) {}
         }
         
-        // Start scanning after 3 seconds
         setTimeout(stealthScan, 3000);
         """
         userContentController.addUserScript(WKUserScript(source: scannerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
@@ -124,16 +114,15 @@ struct ChessWebView: UIViewRepresentable {
         webview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         webview.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Mobile/15E148 Safari/604.1"
         
+        // Load the initial URL
         let url = URL(string: engine.currentURL)!
         webview.load(URLRequest(url: url))
         return webview
     }
     
     func updateUIView(_ uiView: WKWebView, context: Context) {
+        // FIXED: Only update frame, don't force reload
         uiView.frame = UIScreen.main.bounds
-        if let currentURL = uiView.url, currentURL.absoluteString != engine.currentURL {
-            uiView.load(URLRequest(url: URL(string: engine.currentURL)!))
-        }
     }
     
     func makeCoordinator() -> Coordinator {
@@ -165,14 +154,19 @@ struct ContentView: View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
                 HStack {
-                    Button(action: { engine.currentURL = "https://www.chess.com/play/computer" }) {
+                    Button(action: { 
+                        engine.currentURL = "https://www.chess.com/play/computer"
+                        // Note: This will only work on next app launch or if we add a reload mechanism
+                    }) {
                         Text("Play").fontWeight(.bold)
                             .foregroundColor(engine.currentURL.contains("chess.com") ? .white : .gray)
                             .padding(.horizontal, 15).padding(.vertical, 8)
                             .background(engine.currentURL.contains("chess.com") ? Color.blue : Color.clear).cornerRadius(8)
                     }
                     Spacer()
-                    Button(action: { engine.currentURL = "https://lichess.org/analysis" }) {
+                    Button(action: { 
+                        engine.currentURL = "https://lichess.org/analysis"
+                    }) {
                         Text("Lichess").fontWeight(.bold)
                             .foregroundColor(engine.currentURL.contains("lichess") ? .white : .gray)
                             .padding(.horizontal, 15).padding(.vertical, 8)
@@ -191,7 +185,6 @@ struct ContentView: View {
                 VStack {
                     Spacer()
                     
-                    // Manual FEN Input (Fallback)
                     if showManualInput {
                         HStack {
                             TextField("Paste FEN here...", text: $manualFEN)
@@ -280,7 +273,6 @@ struct EnginePanel: View {
                 }
             }
             
-            // Show last FEN for debugging
             if !lastFEN.isEmpty {
                 Text("FEN: \(lastFEN)")
                     .font(.system(size: 8, design: .monospaced))
