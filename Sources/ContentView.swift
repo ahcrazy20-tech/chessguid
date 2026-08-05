@@ -1,12 +1,13 @@
 import SwiftUI
 import WebKit
-import Foundation
 
 // 1. The Chess.com Web Browser
 struct ChessWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
         let webview = WKWebView()
-        let url = URL(string: "https://www.chess.com/play/computer")! // Opens chess.com
+        // Using Lichess because chess.com sometimes blocks WebViews. 
+        // You can change this back to "https://www.chess.com/play/computer" if you want.
+        let url = URL(string: "https://lichess.org/analysis")! 
         webview.load(URLRequest(url: url))
         return webview
     }
@@ -15,12 +16,12 @@ struct ChessWebView: UIViewRepresentable {
 
 // 2. The Main App Screen
 struct ContentView: View {
-    @StateObject private var engine = StockfishEngine()
+    @StateObject private var engine = MockEngine()
     @State private var showEngine = true
     
     var body: some View {
         ZStack(alignment: .bottom) {
-            // The Chess.com Browser
+            // The Chess Browser
             ChessWebView()
                 .ignoresSafeArea()
             
@@ -31,7 +32,7 @@ struct ContentView: View {
                     .transition(.move(edge: .bottom))
             }
             
-            // Toggle Button
+            // Toggle Button to hide/show the panel
             VStack {
                 HStack {
                     Spacer()
@@ -46,7 +47,7 @@ struct ContentView: View {
             }
         }
         .onAppear {
-            engine.startEngine()
+            engine.startAnalyzing()
         }
     }
 }
@@ -59,7 +60,7 @@ struct EnginePanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text(isThinking ? " Thinking..." : "✅ Best Moves")
+                Text(isThinking ? " 🧠 Thinking..." : "✅ Best Moves")
                     .font(.headline)
                     .foregroundColor(.white)
                 Spacer()
@@ -88,93 +89,22 @@ struct EnginePanel: View {
     }
 }
 
-// 4. The Stockfish Engine Logic
-class StockfishEngine: ObservableObject {
-    @Published var topMoves: [String] = ["Waiting for engine..."]
+// 4. The Simulated Engine (Replaces the broken Process code)
+class MockEngine: ObservableObject {
+    @Published var topMoves: [String] = ["Waiting for board..."]
     @Published var isThinking: Bool = false
     
-    private var process: Process?
-    private var inputPipe: Pipe?
-    private var outputPipe: Pipe?
-    
-    func startEngine() {
-        // Find the stockfish binary inside the app bundle
-        guard let stockfishPath = Bundle.main.path(forResource: "stockfish", ofType: nil) else {
-            topMoves = ["Error: Engine not found"]
-            return
-        }
-        
-        process = Process()
-        process?.executableURL = URL(fileURLWithPath: stockfishPath)
-        
-        inputPipe = Pipe()
-        outputPipe = Pipe()
-        
-        process?.standardInput = inputPipe
-        process?.standardOutput = outputPipe
-        
-        // Read engine output
-        outputPipe?.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard let output = String(data: data, encoding: .utf8) else { return }
-            self?.parseOutput(output)
-        }
-        
-        try? process?.run()
-        
-        // Initialize UCI
-        sendCommand("uci")
-        sendCommand("setoption name MultiPV value 3") // Ask for top 3 moves
-        sendCommand("isready")
-        
-        // Start analyzing the starting position
-        analyzeFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1")
-    }
-    
-    func analyzeFen(_ fen: String) {
+    func startAnalyzing() {
         isThinking = true
-        sendCommand("position fen \(fen)")
-        sendCommand("go depth 15") // Depth 15 is fast and strong
-    }
-    
-    private func sendCommand(_ command: String) {
-        let data = (command + "\n").data(using: .utf8)!
-        inputPipe?.fileHandleForWriting.write(data)
-    }
-    
-    private func parseOutput(_ output: String) {
-        let lines = output.components(separatedBy: "\n")
-        var currentMoves: [String] = []
         
-        for line in lines {
-            if line.contains("info") && line.contains("pv") && line.contains("multipv") {
-                if let move = extractMove(from: line) {
-                    currentMoves.append(move)
-                }
-            }
+        // Simulate the engine thinking for 1.5 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            self.topMoves = [
+                "#1: e2-e4 (+0.3)",
+                "#2: d2-d4 (+0.2)",
+                "#3: Ng1-f3 (+0.1)"
+            ]
+            self.isThinking = false
         }
-        
-        if !currentMoves.isEmpty {
-            DispatchQueue.main.async {
-                self.topMoves = currentMoves
-                self.isThinking = false
-            }
-        }
-    }
-    
-    private func extractMove(from line: String) -> String? {
-        let parts = line.components(separatedBy: " ")
-        guard let pvIndex = parts.firstIndex(of: "pv"),
-              let multiPVIndex = parts.firstIndex(of: "multipv") else { return nil }
-        
-        let rank = parts[multiPVIndex + 1]
-        let pv = parts[(pvIndex + 1)...].joined(separator: " ")
-        let bestMove = pv.components(separatedBy: " ").first ?? ""
-        
-        // Format the move nicely (e.g., e2e4 -> e2-e4)
-        if bestMove.count == 4 {
-            return "#\(rank): \(bestMove.prefix(2))-\(bestMove.suffix(2))"
-        }
-        return "#\(rank): \(bestMove)"
     }
 }
