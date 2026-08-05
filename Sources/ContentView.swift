@@ -6,34 +6,16 @@ struct ChessWebView: UIViewRepresentable {
     
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        
-        // FIX FOR LOGIN: Persistent data store
         config.websiteDataStore = WKWebsiteDataStore.default()
-        
         config.allowsInlineMediaPlayback = true
         config.defaultWebpagePreferences.preferredContentMode = .mobile
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
         
         let userContentController = WKUserContentController()
         
-        // DYNAMIC PROTECTION 1: Advanced Safari Environment Spoofing
+        // Stealth Script
         let stealthScript = """
-        // Hide automation flags
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-        Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-        Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-        
-        // Fake Chrome/Safari environment
-        window.chrome = { runtime: {} };
-        Object.defineProperty(navigator, 'permissions', {
-            get: () => ({ query: Promise.resolve({ state: 'granted' }) })
-        });
-        
-        // Prevent debugging detection
-        console.log = function() {};
-        console.debug = function() {};
-        
-        // UI Tweaks for better visibility
         document.body.style.paddingTop = '60px';
         document.body.style.backgroundColor = '#262421';
         document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
@@ -41,76 +23,97 @@ struct ChessWebView: UIViewRepresentable {
         """
         userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
-        // DYNAMIC PROTECTION 2: Randomized "Human-like" Board Scanner
+        // IMPROVED Scanner Script - More robust FEN detection
         let scannerScript = """
         var _lastFen = "";
+        var _scanCount = 0;
         
-        function stealthScan() {
-            // Random delay between 2500ms and 5500ms to look human
-            var delay = Math.floor(Math.random() * 3000) + 2500;
-            setTimeout(stealthScan, delay);
-            
+        function getFEN() {
             try {
-                var _board = document.querySelector('.board');
-                if (!_board) return;
+                // Try multiple selectors to find the board
+                var board = document.querySelector('.board');
+                if (!board) return null;
                 
-                var _fen = "";
-                var _isBlack = _board.classList.contains('orientation-black');
+                var fen = "";
+                var isBlack = board.classList.contains('orientation-black');
                 
-                for (var _r = 0; _r < 8; _r++) {
-                    var _empty = 0;
-                    for (var _f = 0; _f < 8; _f++) {
-                        var _sqIndex = _isBlack ? (7-_r)*8 + (7-_f) : _r*8 + _f;
-                        var _square = _board.querySelector('.square-' + _sqIndex);
+                // Scan each rank (row)
+                for (var rank = 0; rank < 8; rank++) {
+                    var emptyCount = 0;
+                    
+                    for (var file = 0; file < 8; file++) {
+                        // Calculate square index based on orientation
+                        var actualRank = isBlack ? (7 - rank) : rank;
+                        var actualFile = isBlack ? (7 - file) : file;
+                        var squareIndex = actualRank * 8 + actualFile;
                         
-                        if (_square) {
-                            var _pieceEl = _square.querySelector('.piece');
-                            if (_pieceEl) {
-                                if (_empty > 0) { _fen += _empty; _empty = 0; }
-                                var _cls = _pieceEl.getAttribute('class') || "";
-                                var _isWhite = _cls.indexOf('white') !== -1;
-                                var _type = 'p';
+                        // Try to find the square element
+                        var square = board.querySelector('[data-square="' + squareIndex + '"]') || 
+                                    board.querySelector('.square-' + squareIndex);
+                        
+                        if (square) {
+                            // Look for piece in the square
+                            var piece = square.querySelector('.piece') || 
+                                       square.querySelector('[class*="piece"]');
+                            
+                            if (piece) {
+                                if (emptyCount > 0) {
+                                    fen += emptyCount;
+                                    emptyCount = 0;
+                                }
                                 
-                                if (_cls.indexOf('knight') !== -1) _type = 'n';
-                                else if (_cls.indexOf('bishop') !== -1) _type = 'b';
-                                else if (_cls.indexOf('rook') !== -1) _type = 'r';
-                                else if (_cls.indexOf('queen') !== -1) _type = 'q';
-                                else if (_cls.indexOf('king') !== -1) _type = 'k';
+                                var pieceClass = piece.className || piece.getAttribute('class') || '';
+                                var isWhite = pieceClass.includes('white') || pieceClass.includes('White');
+                                var pieceType = 'p';
                                 
-                                _fen += _isWhite ? _type.toUpperCase() : _type.toLowerCase();
+                                if (pieceClass.includes('knight') || pieceClass.includes('Knight')) pieceType = 'n';
+                                else if (pieceClass.includes('bishop') || pieceClass.includes('Bishop')) pieceType = 'b';
+                                else if (pieceClass.includes('rook') || pieceClass.includes('Rook')) pieceType = 'r';
+                                else if (pieceClass.includes('queen') || pieceClass.includes('Queen')) pieceType = 'q';
+                                else if (pieceClass.includes('king') || pieceClass.includes('King')) pieceType = 'k';
+                                
+                                fen += isWhite ? pieceType.toUpperCase() : pieceType.toLowerCase();
                             } else {
-                                _empty++;
+                                emptyCount++;
                             }
                         } else {
-                            _empty++;
+                            emptyCount++;
                         }
                     }
-                    if (_empty > 0) _fen += _empty;
-                    if (_r < 7) _fen += "/";
+                    
+                    if (emptyCount > 0) fen += emptyCount;
+                    if (rank < 7) fen += '/';
                 }
                 
-                // Determine turn based on whose pieces are at the bottom
-                var bottomSquare = _isBlack ? 56 : 0;
-                var bottomPiece = _board.querySelector('.square-' + bottomSquare + ' .piece');
+                // Determine turn (simplified - assume white moves first)
                 var turn = 'w';
-                if (bottomPiece) {
-                    var bottomCls = bottomPiece.getAttribute('class') || "";
-                    if (bottomCls.indexOf('black') !== -1) turn = 'b';
-                }
+                fen += ' ' + turn + ' - - 0 1';
                 
-                _fen += " " + turn + " - - 0 1";
-                
-                if (_fen !== _lastFen && _fen.length > 10) {
-                    _lastFen = _fen;
-                    window.webkit.messageHandlers.fenDetector.postMessage(_fen);
-                }
+                return fen;
             } catch(e) {
-                // Fail silently to avoid detection
+                return null;
             }
         }
         
-        // Start the first scan after 2 seconds
-        setTimeout(stealthScan, 2000);
+        function stealthScan() {
+            // Random delay between 3-6 seconds for stealth
+            var delay = Math.floor(Math.random() * 3000) + 3000;
+            setTimeout(stealthScan, delay);
+            
+            try {
+                var fen = getFEN();
+                if (fen && fen.length > 10 && fen !== _lastFen) {
+                    _lastFen = fen;
+                    _scanCount++;
+                    window.webkit.messageHandlers.fenDetector.postMessage(fen);
+                }
+            } catch(e) {
+                // Silent fail
+            }
+        }
+        
+        // Start scanning after 3 seconds
+        setTimeout(stealthScan, 3000);
         """
         userContentController.addUserScript(WKUserScript(source: scannerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         userContentController.add(context.coordinator, name: "fenDetector")
@@ -119,8 +122,6 @@ struct ChessWebView: UIViewRepresentable {
         let webview = WKWebView(frame: .zero, configuration: config)
         webview.backgroundColor = UIColor(red: 38/255, green: 36/255, blue: 33/255, alpha: 1.0)
         webview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        
-        // Perfect Safari User-Agent
         webview.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Mobile/15E148 Safari/604.1"
         
         let url = URL(string: engine.currentURL)!
@@ -157,6 +158,8 @@ struct ContentView: View {
     @State private var buttonPosition: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
     @State private var isDragging = false
+    @State private var manualFEN: String = ""
+    @State private var showManualInput = false
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -175,6 +178,9 @@ struct ContentView: View {
                             .padding(.horizontal, 15).padding(.vertical, 8)
                             .background(engine.currentURL.contains("lichess") ? Color.green : Color.clear).cornerRadius(8)
                     }
+                    Button(action: { showManualInput.toggle() }) {
+                        Image(systemName: "keyboard").foregroundColor(.yellow).font(.title2)
+                    }
                 }
                 .padding(.top, 50).padding(.horizontal).background(Color.black.opacity(0.8))
                 
@@ -185,16 +191,37 @@ struct ContentView: View {
                 VStack {
                     Spacer()
                     
+                    // Manual FEN Input (Fallback)
+                    if showManualInput {
+                        HStack {
+                            TextField("Paste FEN here...", text: $manualFEN)
+                                .textFieldStyle(.roundedBorder)
+                                .autocapitalization(.none)
+                                .font(.caption)
+                            
+                            Button(action: {
+                                engine.analyzeFEN(manualFEN)
+                                showManualInput = false
+                            }) {
+                                Image(systemName: "cpu.fill").foregroundColor(.green).font(.title2)
+                            }
+                        }
+                        .padding(.horizontal)
+                        .padding(.bottom, 5)
+                    }
+                    
                     HStack {
                         Image(systemName: "shield.lefthalf.filled").foregroundColor(.green)
-                        Text(engine.isThinking ? "  Scanning Stealthily..." : "  Live Engine Active")
+                        Text(engine.isThinking ? "  Calculating..." : "  Live Engine Active")
                             .font(.caption).foregroundColor(.gray)
                         Spacer()
+                        Text("Scans: \(engine.scanCount)")
+                            .font(.caption2).foregroundColor(.gray)
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 2)
                     
-                    EnginePanel(moves: engine.topMoves, isThinking: engine.isThinking)
+                    EnginePanel(moves: engine.topMoves, isThinking: engine.isThinking, lastFEN: engine.lastFEN)
                         .padding(.horizontal).padding(.bottom, 40)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
@@ -223,6 +250,8 @@ struct ContentView: View {
 struct EnginePanel: View {
     let moves: [String]
     let isThinking: Bool
+    let lastFEN: String
+    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -231,16 +260,36 @@ struct EnginePanel: View {
                 Spacer()
             }
             Divider().background(Color.white.opacity(0.3))
-            ForEach(Array(moves.enumerated()), id: \.offset) { index, move in
-                HStack {
-                    Text("#\(index + 1)").fontWeight(.bold).foregroundColor(index == 0 ? .green : (index == 1 ? .yellow : .orange)).frame(width: 25, alignment: .center)
-                    Text(move).font(.system(.body, design: .monospaced).bold()).foregroundColor(.white)
-                    Spacer()
+            
+            if moves.isEmpty || moves[0] == "Waiting for board..." {
+                Text("Waiting for position...")
+                    .foregroundColor(.gray)
+                    .font(.caption)
+                    .padding(.vertical, 4)
+            } else {
+                ForEach(Array(moves.enumerated()), id: \.offset) { index, move in
+                    HStack {
+                        Text("#\(index + 1)").fontWeight(.bold)
+                            .foregroundColor(index == 0 ? .green : (index == 1 ? .yellow : .orange))
+                            .frame(width: 25, alignment: .center)
+                        Text(move).font(.system(.body, design: .monospaced).bold()).foregroundColor(.white)
+                        Spacer()
+                    }
+                    .padding(.vertical, 4).padding(.horizontal, 8)
+                    .background(Color.white.opacity(0.1)).cornerRadius(6)
                 }
-                .padding(.vertical, 4).padding(.horizontal, 8).background(Color.white.opacity(0.1)).cornerRadius(6)
+            }
+            
+            // Show last FEN for debugging
+            if !lastFEN.isEmpty {
+                Text("FEN: \(lastFEN)")
+                    .font(.system(size: 8, design: .monospaced))
+                    .foregroundColor(.gray)
+                    .lineLimit(2)
             }
         }
-        .padding().background(Color.black.opacity(0.90)).cornerRadius(20).shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10)
+        .padding().background(Color.black.opacity(0.90)).cornerRadius(20)
+        .shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10)
     }
 }
 
@@ -248,17 +297,25 @@ class LiveEngine: ObservableObject {
     @Published var topMoves: [String] = ["Waiting for board..."]
     @Published var isThinking: Bool = false
     @Published var currentURL: String = "https://www.chess.com/play/computer"
+    @Published var lastFEN: String = ""
+    @Published var scanCount: Int = 0
     
     private var lastAnalyzedFen: String = ""
     
     func analyzeFEN(_ fen: String) {
+        scanCount += 1
+        lastFEN = fen
+        
         if fen == lastAnalyzedFen { return }
         lastAnalyzedFen = fen
         
-        guard let board = Board.fromFEN(fen) else { return }
+        guard let board = Board.fromFEN(fen) else {
+            topMoves = ["FEN parse failed"]
+            isThinking = false
+            return
+        }
         
         isThinking = true
-        topMoves = ["Calculating..."]
         
         DispatchQueue.global(qos: .userInitiated).async {
             let search = SearchV2(maxNodes: 100_000, timeLimit: 2.0)
@@ -266,7 +323,7 @@ class LiveEngine: ObservableObject {
             
             DispatchQueue.main.async {
                 if results.isEmpty {
-                    self.topMoves = ["No legal moves"]
+                    self.topMoves = ["No legal moves found"]
                 } else {
                     self.topMoves = results.map { result in
                         let scoreDisplay = result.score > 90000 ? "Mate" : String(format: "%+.1f", Double(result.score) / 100.0)
