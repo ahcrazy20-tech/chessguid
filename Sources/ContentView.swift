@@ -13,52 +13,68 @@ struct ChessWebView: UIViewRepresentable {
         
         let userContentController = WKUserContentController()
         
+        // 1. Stealth Script + INJECTED DEBUG BUTTON
         let stealthScript = """
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
         document.body.style.paddingTop = '60px';
         document.body.style.backgroundColor = '#262421';
         document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
         document.body.style.userSelect = 'none';
+        
+        // INJECT A RED BUTTON ON THE SCREEN TO COPY HTML
+        setTimeout(function() {
+            var btn = document.createElement("div");
+            btn.innerHTML = "COPY HTML";
+            btn.style.cssText = "position:fixed; top:100px; right:10px; background:red; color:white; padding:10px; z-index:99999; border-radius:5px; font-weight:bold; font-family:sans-serif; box-shadow: 0 0 10px black;";
+            btn.onclick = function() {
+                var board = document.querySelector('.board');
+                if (board) {
+                    window.webkit.messageHandlers.debugHTML.postMessage(board.innerHTML);
+                } else {
+                    // Fallback if .board class doesn't exist
+                    var allDivs = document.querySelectorAll('div');
+                    var html = "";
+                    for(var i=0; i<allDivs.length; i++) {
+                        if(allDivs[i].className.includes('board') || allDivs[i].className.includes('chess')) {
+                             html += allDivs[i].innerHTML;
+                        }
+                    }
+                    window.webkit.messageHandlers.debugHTML.postMessage(html || "No board found. Body classes: " + document.body.className);
+                }
+            };
+            document.body.appendChild(btn);
+        }, 3000);
         """
         userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
-        // DEEP SEARCH SCANNER (Image Source + Debug Mode)
+        // 2. Scanner Script (Keep trying to find moves)
         let scannerScript = """
         var _lastFen = "";
-        
         function getFEN() {
             try {
                 var board = document.querySelector('.board');
                 if (!board) return null;
-                
                 var fen = "";
                 var isBlack = board.classList.contains('orientation-black');
-                
                 for (var rank = 0; rank < 8; rank++) {
                     var emptyCount = 0;
                     for (var file = 0; file < 8; file++) {
                         var actualRank = isBlack ? (7 - rank) : rank;
                         var actualFile = isBlack ? (7 - file) : file;
                         var squareIndex = actualRank * 8 + actualFile;
-                        
-                        var square = board.querySelector('.square-' + squareIndex) || 
-                                     board.querySelector('[data-square="' + squareIndex + '"]');
-                        
+                        var square = board.querySelector('.square-' + squareIndex) || board.querySelector('[data-square="' + squareIndex + '"]');
                         var pieceType = null;
                         var isWhite = false;
-                        
                         if (square) {
                             var img = square.querySelector('img');
                             if (img && img.src) {
                                 var src = img.src.toLowerCase();
-                                
-                                if (src.includes('wp') || src.includes('white-pawn') || src.includes('wpng')) { pieceType = 'p'; isWhite = true; }
+                                if (src.includes('wp') || src.includes('white-pawn')) { pieceType = 'p'; isWhite = true; }
                                 else if (src.includes('wn') || src.includes('white-knight')) { pieceType = 'n'; isWhite = true; }
                                 else if (src.includes('wb') || src.includes('white-bishop')) { pieceType = 'b'; isWhite = true; }
                                 else if (src.includes('wr') || src.includes('white-rook')) { pieceType = 'r'; isWhite = true; }
                                 else if (src.includes('wq') || src.includes('white-queen')) { pieceType = 'q'; isWhite = true; }
                                 else if (src.includes('wk') || src.includes('white-king')) { pieceType = 'k'; isWhite = true; }
-                                
                                 else if (src.includes('bp') || src.includes('black-pawn')) { pieceType = 'p'; isWhite = false; }
                                 else if (src.includes('bn') || src.includes('black-knight')) { pieceType = 'n'; isWhite = false; }
                                 else if (src.includes('bb') || src.includes('black-bishop')) { pieceType = 'b'; isWhite = false; }
@@ -67,13 +83,10 @@ struct ChessWebView: UIViewRepresentable {
                                 else if (src.includes('bk') || src.includes('black-king')) { pieceType = 'k'; isWhite = false; }
                             }
                         }
-                        
                         if (pieceType) {
                             if (emptyCount > 0) { fen += emptyCount; emptyCount = 0; }
                             fen += isWhite ? pieceType.toUpperCase() : pieceType.toLowerCase();
-                        } else {
-                            emptyCount++;
-                        }
+                        } else { emptyCount++; }
                     }
                     if (emptyCount > 0) fen += emptyCount;
                     if (rank < 7) fen += '/';
@@ -81,14 +94,6 @@ struct ChessWebView: UIViewRepresentable {
                 return fen + " w - - 0 1";
             } catch(e) { return null; }
         }
-        
-        function getDebugHTML() {
-            try {
-                var board = document.querySelector('.board');
-                return board ? board.innerHTML.substring(0, 2000) : "No board found";
-            } catch(e) { return "Error: " + e.message; }
-        }
-        
         function stealthScan() {
             var delay = Math.floor(Math.random() * 3000) + 2000;
             setTimeout(stealthScan, delay);
@@ -103,6 +108,7 @@ struct ChessWebView: UIViewRepresentable {
         setTimeout(stealthScan, 2000);
         """
         userContentController.addUserScript(WKUserScript(source: scannerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        
         userContentController.add(context.coordinator, name: "fenDetector")
         userContentController.add(context.coordinator, name: "debugHTML")
         config.userContentController = userContentController
@@ -133,7 +139,7 @@ struct ChessWebView: UIViewRepresentable {
             if message.name == "fenDetector", let fen = message.body as? String {
                 engine.analyzeFEN(fen)
             } else if message.name == "debugHTML", let html = message.body as? String {
-                // FIX: Added 'self.' here to satisfy Swift's closure rules
+                // FIX: Added 'self.' to prevent the build error
                 DispatchQueue.main.async {
                     self.engine.debugHTML = html
                 }
@@ -172,10 +178,7 @@ struct ContentView: View {
                     Button(action: { showManualInput.toggle() }) {
                         Image(systemName: "keyboard").foregroundColor(.yellow).font(.title3)
                     }
-                    Button(action: { 
-                        showDebug = true
-                        // Trigger debug scan via JS
-                    }) {
+                    Button(action: { showDebug = true }) {
                         Image(systemName: "ladybug.fill").foregroundColor(.red).font(.title3)
                     }
                 }
@@ -187,27 +190,20 @@ struct ContentView: View {
             if showEngine {
                 VStack {
                     Spacer()
-                    
                     if showManualInput {
                         HStack {
-                            TextField("Paste FEN...", text: $manualFEN)
-                                .textFieldStyle(.roundedBorder).font(.caption)
+                            TextField("Paste FEN...", text: $manualFEN).textFieldStyle(.roundedBorder).font(.caption)
                             Button(action: { engine.analyzeFEN(manualFEN); showManualInput = false }) {
                                 Image(systemName: "cpu.fill").foregroundColor(.green).font(.title2)
                             }
-                        }
-                        .padding(.horizontal).padding(.bottom, 5)
+                        }.padding(.horizontal).padding(.bottom, 5)
                     }
-                    
                     HStack {
                         Image(systemName: "shield.lefthalf.filled").foregroundColor(.green)
-                        Text(engine.isThinking ? "  Calculating..." : "  Live Engine Active")
-                            .font(.caption).foregroundColor(.gray)
+                        Text(engine.isThinking ? "  Calculating..." : "  Live Engine Active").font(.caption).foregroundColor(.gray)
                         Spacer()
-                        Text("Scans: \(engine.scanCount)")
-                            .font(.caption2).foregroundColor(.gray)
-                    }
-                    .padding(.horizontal).padding(.bottom, 2)
+                        Text("Scans: \(engine.scanCount)").font(.caption2).foregroundColor(.gray)
+                    }.padding(.horizontal).padding(.bottom, 2)
                     
                     EnginePanel(moves: engine.topMoves, isThinking: engine.isThinking, lastFEN: engine.lastFEN)
                         .padding(.horizontal).padding(.bottom, 40)
@@ -217,35 +213,29 @@ struct ContentView: View {
             
             if showDebug {
                 ZStack {
-                    Color.black.opacity(0.9).ignoresSafeArea()
+                    Color.black.opacity(0.95).ignoresSafeArea()
                     VStack {
                         HStack {
-                            Text("DEBUG HTML (Copy this if scanner fails)")
-                                .foregroundColor(.white).font(.headline)
+                            Text("DEBUG HTML").foregroundColor(.white).font(.headline)
                             Spacer()
                             Button(action: { showDebug = false }) {
                                 Image(systemName: "xmark.circle.fill").foregroundColor(.red).font(.title)
                             }
-                        }
-                        .padding()
+                        }.padding()
                         
                         ScrollView {
                             Text(engine.debugHTML)
                                 .font(.system(size: 10, design: .monospaced))
                                 .foregroundColor(.green)
                                 .padding()
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         
                         Button(action: {
                             UIPasteboard.general.string = engine.debugHTML
                         }) {
-                            Text("Copy to Clipboard")
-                                .foregroundColor(.black)
-                                .padding()
-                                .background(Color.white)
-                                .cornerRadius(10)
-                        }
-                        .padding(.bottom, 50)
+                            Text("Copy to Clipboard").foregroundColor(.black).padding().background(Color.white).cornerRadius(10)
+                        }.padding(.bottom, 50)
                     }
                 }
             }
@@ -274,7 +264,6 @@ struct EnginePanel: View {
     let moves: [String]
     let isThinking: Bool
     let lastFEN: String
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -288,23 +277,17 @@ struct EnginePanel: View {
             } else {
                 ForEach(Array(moves.enumerated()), id: \.offset) { index, move in
                     HStack {
-                        Text("#\(index + 1)").fontWeight(.bold)
-                            .foregroundColor(index == 0 ? .green : (index == 1 ? .yellow : .orange))
-                            .frame(width: 25, alignment: .center)
+                        Text("#\(index + 1)").fontWeight(.bold).foregroundColor(index == 0 ? .green : (index == 1 ? .yellow : .orange)).frame(width: 25, alignment: .center)
                         Text(move).font(.system(.body, design: .monospaced).bold()).foregroundColor(.white)
                         Spacer()
-                    }
-                    .padding(.vertical, 4).padding(.horizontal, 8)
-                    .background(Color.white.opacity(0.1)).cornerRadius(6)
+                    }.padding(.vertical, 4).padding(.horizontal, 8).background(Color.white.opacity(0.1)).cornerRadius(6)
                 }
             }
             if !lastFEN.isEmpty {
-                Text("FEN: \(lastFEN)")
-                    .font(.system(size: 8, design: .monospaced)).foregroundColor(.gray).lineLimit(2)
+                Text("FEN: \(lastFEN)").font(.system(size: 8, design: .monospaced)).foregroundColor(.gray).lineLimit(2)
             }
         }
-        .padding().background(Color.black.opacity(0.90)).cornerRadius(20)
-        .shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10)
+        .padding().background(Color.black.opacity(0.90)).cornerRadius(20).shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10)
     }
 }
 
@@ -314,7 +297,7 @@ class LiveEngine: ObservableObject {
     @Published var currentURL: String = "https://www.chess.com/play/computer"
     @Published var lastFEN: String = ""
     @Published var scanCount: Int = 0
-    @Published var debugHTML: String = "Tap the red bug icon to scan HTML..."
+    @Published var debugHTML: String = "Waiting for debug data..."
     
     private var lastAnalyzedFen: String = ""
     
