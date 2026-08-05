@@ -1,17 +1,32 @@
 import SwiftUI
 import WebKit
 
-// 1. The Chess.com Web Browser
+// 1. The Chess.com Web Browser (Fixed to load real chess.com)
 struct ChessWebView: UIViewRepresentable {
     func makeUIView(context: Context) -> WKWebView {
-        let webview = WKWebView()
-        // Using Lichess because chess.com sometimes blocks WebViews. 
-        // You can change this back to "https://www.chess.com/play/computer" if you want.
-        let url = URL(string: "https://lichess.org/analysis")! 
+        let config = WKWebViewConfiguration()
+        
+        // TRICK: Spoof the User-Agent so chess.com thinks we are Safari
+        config.applicationNameForUserAgent = "Version/17.0 Mobile/15E148 Safari/604.1"
+        
+        let webview = WKWebView(frame: .zero, configuration: config)
+        
+        // Fix the black screen: Make background transparent and force full size
+        webview.backgroundColor = UIColor.systemBackground
+        webview.isOpaque = true
+        webview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        
+        // Load real chess.com
+        let url = URL(string: "https://www.chess.com/play/computer")!
         webview.load(URLRequest(url: url))
+        
         return webview
     }
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        // Force the webview to fill the screen
+        uiView.frame = UIScreen.main.bounds
+    }
 }
 
 // 2. The Main App Screen
@@ -21,25 +36,33 @@ struct ContentView: View {
     
     var body: some View {
         ZStack(alignment: .bottom) {
-            // The Chess Browser
+            // The Chess Browser (Fills entire screen)
             ChessWebView()
                 .ignoresSafeArea()
             
-            // The Floating Engine Panel
+            // The Floating Engine Panel (Fixed positioning)
             if showEngine {
-                EnginePanel(moves: engine.topMoves, isThinking: engine.isThinking)
-                    .padding()
-                    .transition(.move(edge: .bottom))
+                VStack {
+                    Spacer() // Pushes the panel to the bottom
+                    
+                    EnginePanel(moves: engine.topMoves, isThinking: engine.isThinking)
+                        .padding(.horizontal)
+                        .padding(.bottom, 40) // Lift it up so it doesn't touch the home bar
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
             
-            // Toggle Button to hide/show the panel
+            // Toggle Button (Top Right)
             VStack {
                 HStack {
                     Spacer()
-                    Button(action: { withAnimation { showEngine.toggle() } }) {
-                        Image(systemName: showEngine ? "chevron.down.circle.fill" : "chevron.up.circle.fill")
-                            .font(.system(size: 40))
+                    Button(action: { 
+                        withAnimation(.spring()) { showEngine.toggle() } 
+                    }) {
+                        Image(systemName: showEngine ? "eye.slash.circle.fill" : "eye.circle.fill")
+                            .font(.system(size: 44))
                             .foregroundColor(.blue)
+                            .shadow(radius: 5)
                             .padding()
                     }
                 }
@@ -58,38 +81,45 @@ struct EnginePanel: View {
     let isThinking: Bool
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(isThinking ? " 🧠 Thinking..." : "✅ Best Moves")
+                Image(systemName: "cpu.fill")
+                    .foregroundColor(.blue)
+                Text(isThinking ? "Calculating best moves..." : "Top 3 Engine Moves")
                     .font(.headline)
                     .foregroundColor(.white)
                 Spacer()
             }
+            
+            Divider().background(Color.white.opacity(0.3))
             
             ForEach(Array(moves.enumerated()), id: \.offset) { index, move in
                 HStack {
                     Text("#\(index + 1)")
                         .fontWeight(.bold)
                         .foregroundColor(index == 0 ? .green : (index == 1 ? .yellow : .orange))
-                        .frame(width: 25)
+                        .frame(width: 30, alignment: .center)
+                    
                     Text(move)
-                        .font(.system(.body, design: .monospaced))
+                        .font(.system(.body, design: .monospaced).bold())
                         .foregroundColor(.white)
+                    
                     Spacer()
                 }
-                .padding(8)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
                 .background(Color.white.opacity(0.1))
-                .cornerRadius(6)
+                .cornerRadius(8)
             }
         }
         .padding()
-        .background(Color.black.opacity(0.85))
-        .cornerRadius(15)
-        .shadow(radius: 10)
+        .background(Color.black.opacity(0.90))
+        .cornerRadius(20)
+        .shadow(color: .black.opacity(0.5), radius: 15, x: 0, y: 10)
     }
 }
 
-// 4. The Simulated Engine (Replaces the broken Process code)
+// 4. The Engine Logic
 class MockEngine: ObservableObject {
     @Published var topMoves: [String] = ["Waiting for board..."]
     @Published var isThinking: Bool = false
@@ -97,12 +127,12 @@ class MockEngine: ObservableObject {
     func startAnalyzing() {
         isThinking = true
         
-        // Simulate the engine thinking for 1.5 seconds
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+        // Simulate thinking
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
             self.topMoves = [
-                "#1: e2-e4 (+0.3)",
-                "#2: d2-d4 (+0.2)",
-                "#3: Ng1-f3 (+0.1)"
+                "e2-e4  (Score: +0.3)",
+                "d2-d4  (Score: +0.2)",
+                "Ng1-f3 (Score: +0.1)"
             ]
             self.isThinking = false
         }
