@@ -7,7 +7,10 @@ targets:
   ChessHelper:
     type: application
     platform: iOS
-    sources: [Sources]
+    sources: 
+      - path: Sources
+      - path: Sources/Resources
+        buildPhase: resources
     settings:
       base:
         INFOPLIST_FILE: Sources/Info.plist
