@@ -498,4 +498,52 @@ final class Search {
             let attacker = b.pieces[m.from]?.type.value ?? 0
             s += victim.type.value * 10 - attacker
         }
-        if m.promotion != nil { 
+        if m.promotion != nil {
+            s += 800
+        }
+        return s
+    }
+}
+
+extension Board {
+    func san(for move: Move) -> String {
+        if move.isCastle {
+            let s = move.to.file == 6 ? "O-O" : "O-O-O"
+            var b = self; b.make(move)
+            let opp = sideToMove.opposite
+            let check = MoveGen.inCheck(b, color: opp)
+            let mate = check && MoveGen.legalMoves(b).isEmpty
+            return s + (mate ? "#" : (check ? "+" : ""))
+        }
+        guard let piece = pieces[move.from] else { return move.uci }
+        var s = ""
+        if piece.type != .pawn { s += piece.type.letter }
+
+        let others = MoveGen.legalMoves(self).filter {
+            $0.to == move.to && $0.from != move.from && pieces[$0.from]?.type == piece.type
+        }
+        if !others.isEmpty {
+            let sameFile = others.contains { $0.from.file == move.from.file }
+            let sameRank = others.contains { $0.from.rank == move.from.rank }
+            if !sameFile { s += String(move.from.name.first!) }
+            else if !sameRank { s += String(move.from.name.last!) }
+            else { s += move.from.name }
+        } else if piece.type == .pawn && pieces[move.to] != nil {
+            s += String(move.from.name.first!)
+        } else if move.isEnPassant {
+            s += String(move.from.name.first!)
+        }
+
+        let capture = pieces[move.to] != nil || move.isEnPassant
+        if capture { s += "x" }
+        s += move.to.name
+        if let promo = move.promotion { s += "=" + promo.letter }
+
+        var b = self; b.make(move)
+        let opp = sideToMove.opposite
+        let check = MoveGen.inCheck(b, color: opp)
+        let mate = check && MoveGen.legalMoves(b).isEmpty
+        s += mate ? "#" : (check ? "+" : "")
+        return s
+    }
+}
