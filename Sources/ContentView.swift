@@ -23,100 +23,125 @@ struct ChessWebView: UIViewRepresentable {
         """
         userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         
-        // 2. THE SMART SCANNER (Orientation-independent, reads image files)
+        // 2. THE ULTIMATE SMART SCANNER
         let scannerScript = """
         var _lastFen = "";
         
-        function getFENSmart() {
-            // Find the board by looking for a div with exactly 64 square-like children
-            var boards = document.querySelectorAll('div');
-            var boardEl = null;
-            for (var i = 0; i < boards.length; i++) {
-                if (boards[i].children.length === 64) {
-                    if (boards[i].children[0].className.includes('square')) {
-                        boardEl = boards[i];
-                        break;
-                    }
+        function getFEN() {
+            // Step 1: Find all 64 squares individually
+            var squares = [];
+            for (var i = 0; i < 64; i++) {
+                // Try class name first
+                var sq = document.querySelector('.square-' + i);
+                // Try data attribute fallback
+                if (!sq) sq = document.querySelector('[data-square="' + i + '"]');
+                
+                if (sq) {
+                    squares.push({id: i, el: sq});
                 }
             }
-            if (!boardEl) return null;
-
-            var squares = Array.prototype.slice.call(boardEl.children);
             
-            // Sort squares by visual position (top to bottom, left to right)
-            // This makes it work for both White and Black orientation automatically!
+            // If we didn't find all 64 squares, it's not a full board yet
+            if (squares.length < 64) return null;
+
+            // Step 2: Sort squares visually (Top-Left to Bottom-Right)
             squares.sort(function(a, b) {
-                var rectA = a.getBoundingClientRect();
-                var rectB = b.getBoundingClientRect();
+                var rectA = a.el.getBoundingClientRect();
+                var rectB = b.el.getBoundingClientRect();
+                // If they are on different rows (top is significantly different)
                 if (Math.abs(rectA.top - rectB.top) > 10) {
                     return rectA.top - rectB.top;
                 }
+                // Otherwise sort by left position
                 return rectA.left - rectB.left;
             });
 
+            // Step 3: Detect Orientation
+            // Check the parent of the first square for orientation class
+            var parent = squares[0].el.parentElement;
+            var isBlackOrientation = false;
+            if (parent && parent.className && parent.className.includes('orientation-black')) {
+                isBlackOrientation = true;
+            }
+
+            // Step 4: Build FEN
             var fen = "";
-            for (var i = 0; i < 64; i++) {
-                var img = squares[i].querySelector('img');
-                var piece = null;
+            var emptyCount = 0;
+            
+            // If White: Start at index 0 (Top-Left is a8). Iterate 0 to 63.
+            // If Black: Start at index 63 (Bottom-Right is a8). Iterate 63 down to 0.
+            var start = isBlackOrientation ? 63 : 0;
+            var end = isBlackOrientation ? -1 : 64;
+            var step = isBlackOrientation ? -1 : 1;
+
+            for (var i = start; i !== end; i += step) {
+                var sq = squares[i].el;
+                var img = sq.querySelector('img');
+                var pieceChar = null;
                 
-                if (img && img.src) {
-                    var src = img.src.toLowerCase();
-                    // Read piece from image filename (e.g., wP.png, bK.png)
-                    if (src.includes('wp') || src.includes('white-pawn')) piece = 'P';
-                    else if (src.includes('wn') || src.includes('white-knight')) piece = 'N';
-                    else if (src.includes('wb') || src.includes('white-bishop')) piece = 'B';
-                    else if (src.includes('wr') || src.includes('white-rook')) piece = 'R';
-                    else if (src.includes('wq') || src.includes('white-queen')) piece = 'Q';
-                    else if (src.includes('wk') || src.includes('white-king')) piece = 'K';
-                    else if (src.includes('bp') || src.includes('black-pawn')) piece = 'p';
-                    else if (src.includes('bn') || src.includes('black-knight')) piece = 'n';
-                    else if (src.includes('bb') || src.includes('black-bishop')) piece = 'b';
-                    else if (src.includes('br') || src.includes('black-rook')) piece = 'r';
-                    else if (src.includes('bq') || src.includes('black-queen')) piece = 'q';
-                    else if (src.includes('bk') || src.includes('black-king')) piece = 'k';
-                }
-                
-                if (piece) {
-                    fen += piece;
-                } else {
-                    // Count consecutive empty squares in the same row
-                    var emptyCount = 1;
-                    while (i + 1 < 64 && squares[i+1].querySelector('img') === null) {
-                        var rectCurr = squares[i].getBoundingClientRect();
-                        var rectNext = squares[i+1].getBoundingClientRect();
-                        // Check if next square is visually in the same row
-                        if (Math.abs(rectCurr.top - rectNext.top) < 10) {
-                            emptyCount++;
-                            i++;
-                        } else {
-                            break;
-                        }
+                if (img) {
+                    var src = (img.src || "").toLowerCase();
+                    var cls = (img.className || "").toLowerCase();
+                    var alt = (img.alt || "").toLowerCase();
+                    var combined = src + " " + cls + " " + alt;
+                    
+                    // Determine Piece Type
+                    if (combined.includes('king') || combined.includes('wk') || combined.includes('bk')) pieceChar = 'K';
+                    else if (combined.includes('queen') || combined.includes('wq') || combined.includes('bq')) pieceChar = 'Q';
+                    else if (combined.includes('rook') || combined.includes('wr') || combined.includes('br')) pieceChar = 'R';
+                    else if (combined.includes('bishop') || combined.includes('wb') || combined.includes('bb')) pieceChar = 'B';
+                    else if (combined.includes('knight') || combined.includes('wn') || combined.includes('bn')) pieceChar = 'N';
+                    else if (combined.includes('pawn') || combined.includes('wp') || combined.includes('bp')) pieceChar = 'P';
+                    
+                    // Determine Color
+                    var isWhitePiece = combined.includes('white') || combined.includes('wp') || combined.includes('wk') || combined.includes('wq') || combined.includes('wr') || combined.includes('wb') || combined.includes('wn');
+                    var isBlackPiece = combined.includes('black') || combined.includes('bp') || combined.includes('bk') || combined.includes('bq') || combined.includes('br') || combined.includes('bb') || combined.includes('bn');
+                    
+                    if (pieceChar) {
+                        if (emptyCount > 0) { fen += emptyCount; emptyCount = 0; }
+                        fen += isWhitePiece ? pieceChar : pieceChar.toLowerCase();
+                    } else {
+                        emptyCount++;
                     }
-                    fen += emptyCount;
+                } else {
+                    emptyCount++;
                 }
                 
-                // Add '/' at the end of each row (every 8 squares)
-                if ((i + 1) % 8 === 0 && i < 63) {
-                    fen += '/';
+                // End of row (every 8 squares)
+                // We need to check if the next square is on a new row visually
+                // Since we sorted them, every 8th item is a new row.
+                // But we must handle the loop direction.
+                // Simple way: Check index relative to start.
+                var stepsTaken = Math.abs(i - start);
+                if ((stepsTaken + 1) % 8 === 0) {
+                    if (emptyCount > 0) { fen += emptyCount; emptyCount = 0; }
+                    if (i !== end - step) { // Don't add slash after last row
+                         fen += '/';
+                    }
                 }
             }
+            
+            // Add turn info (default to white for simplicity, engine can handle it)
             return fen + " w - - 0 1";
         }
         
         function stealthScan() {
-            // Check every 3 seconds
-            setTimeout(stealthScan, 3000);
+            // Scan every 2.5 seconds
+            setTimeout(stealthScan, 2500);
             try {
-                var fen = getFENSmart();
+                var fen = getFEN();
+                // Only send if valid and changed
                 if (fen && fen.length > 10 && fen !== _lastFen && !fen.includes('8/8/8/8/8/8/8/8')) {
                     _lastFen = fen;
                     window.webkit.messageHandlers.fenDetector.postMessage(fen);
                 }
-            } catch(e) {}
+            } catch(e) {
+                // Silent fail
+            }
         }
         
-        // Start scanning after 2 seconds
-        setTimeout(stealthScan, 2000);
+        // Start immediately
+        setTimeout(stealthScan, 1000);
         """
         userContentController.addUserScript(WKUserScript(source: scannerScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         userContentController.add(context.coordinator, name: "fenDetector")
