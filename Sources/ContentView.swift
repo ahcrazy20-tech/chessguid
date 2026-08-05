@@ -9,7 +9,7 @@ struct ChessWebView: UIViewRepresentable {
         
         // FIX FOR LOGIN: Persistent data store & Process Pool
         config.websiteDataStore = WKWebsiteDataStore.default()
-        config.processPool = WKProcessPool()
+     
         
         config.allowsInlineMediaPlayback = true
         config.defaultWebpagePreferences.preferredContentMode = .mobile
