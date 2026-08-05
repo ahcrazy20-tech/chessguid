@@ -1,70 +1,38 @@
 import SwiftUI
 import WebKit
 
-// 1. The WebView with Real Stockfish JS Injection
 struct ChessWebView: UIViewRepresentable {
     @ObservedObject var engine: LiveEngine
     
     func makeUIView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
+        
+        // FIX FOR LOGIN: Persistent data store & Process Pool
         config.websiteDataStore = WKWebsiteDataStore.default()
+        config.processPool = WKProcessPool()
+        
         config.allowsInlineMediaPlayback = true
         config.defaultWebpagePreferences.preferredContentMode = .mobile
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
         
         let userContentController = WKUserContentController()
-        
-        // INJECT REAL STOCKFISH ENGINE (WebAssembly)
-        let stockfishInjection = """
-        // Load Stockfish.js from CDN
-        var script = document.createElement('script');
-        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.0/stockfish.js';
-        document.head.appendChild(script);
-        
-        script.onload = function() {
-            // Initialize the Web Worker
-            var engine = new Worker(script.src);
-            engine.postMessage('uci');
-            engine.postMessage('setoption name MultiPV value 3');
-            
-            engine.onmessage = function(event) {
-                var line = event.data;
-                // Only send relevant analysis lines back to Swift
-                if (line.startsWith('info') && line.includes('pv') && line.includes('multipv')) {
-                    window.webkit.messageHandlers.engineOutput.postMessage(line);
-                }
-            };
-            
-            // Expose function to Swift to trigger analysis
-            window.analyzeFEN = function(fen) {
-                engine.postMessage('position fen ' + fen);
-                engine.postMessage('go depth 15');
-            };
-        };
-        
-        // Monitor Lichess URL for FEN changes (Format: /analysis/[fen])
-        setInterval(function() {
-            var path = window.location.pathname;
-            if (path.startsWith('/analysis/')) {
-                var fen = path.replace('/analysis/', '').replace(/_/g, ' ');
-                if (window.lastFen !== fen && window.analyzeFEN) {
-                    window.lastFen = fen;
-                    window.analyzeFEN(fen);
-                }
-            }
-        }, 1000);
+        let stealthScript = """
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+        document.body.style.paddingTop = '60px';
+        document.body.style.backgroundColor = '#262421';
+        document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
+        document.body.style.userSelect = 'none';
         """
-        userContentController.addUserScript(WKUserScript(source: stockfishInjection, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-        userContentController.add(context.coordinator, name: "engineOutput")
+        userContentController.addUserScript(WKUserScript(source: stealthScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         config.userContentController = userContentController
         
         let webview = WKWebView(frame: .zero, configuration: config)
         webview.backgroundColor = UIColor(red: 38/255, green: 36/255, blue: 33/255, alpha: 1.0)
         webview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        webview.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Mobile/15E148 Safari/604.1"
         
         let url = URL(string: engine.currentURL)!
         webview.load(URLRequest(url: url))
-        
         return webview
     }
     
@@ -74,100 +42,65 @@ struct ChessWebView: UIViewRepresentable {
             uiView.load(URLRequest(url: URL(string: engine.currentURL)!))
         }
     }
-    
-    func makeCoordinator() -> Coordinator {
-        Coordinator(engine: engine)
-    }
-    
-    class Coordinator: NSObject, WKScriptMessageHandler {
-        let engine: LiveEngine
-        init(engine: LiveEngine) { self.engine = engine }
-        
-        func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
-            if message.name == "engineOutput", let line = message.body as? String {
-                engine.parseUCIOutput(line)
-            }
-        }
-    }
 }
 
-// 2. The Main App Screen
 struct ContentView: View {
     @StateObject private var engine = LiveEngine()
     @State private var showEngine = true
     @State private var buttonPosition: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
     @State private var isDragging = false
+    @State private var fenInput: String = ""
     
     var body: some View {
         ZStack(alignment: .bottom) {
             VStack(spacing: 0) {
-                // Top Navigation Bar
                 HStack {
-                    Button(action: { engine.switchToChessCom() }) {
-                        Text("Play")
-                            .fontWeight(.bold)
+                    Button(action: { engine.currentURL = "https://www.chess.com/play/computer" }) {
+                        Text("Play").fontWeight(.bold)
                             .foregroundColor(engine.currentURL.contains("chess.com") ? .white : .gray)
-                            .padding(.horizontal, 15)
-                            .padding(.vertical, 8)
-                            .background(engine.currentURL.contains("chess.com") ? Color.blue : Color.clear)
-                            .cornerRadius(8)
+                            .padding(.horizontal, 15).padding(.vertical, 8)
+                            .background(engine.currentURL.contains("chess.com") ? Color.blue : Color.clear).cornerRadius(8)
                     }
                     Spacer()
-                    Button(action: { engine.switchToLichess() }) {
-                        Text("Real Engine")
-                            .fontWeight(.bold)
+                    Button(action: { engine.currentURL = "https://lichess.org/analysis" }) {
+                        Text("Lichess").fontWeight(.bold)
                             .foregroundColor(engine.currentURL.contains("lichess") ? .white : .gray)
-                            .padding(.horizontal, 15)
-                            .padding(.vertical, 8)
-                            .background(engine.currentURL.contains("lichess") ? Color.green : Color.clear)
-                            .cornerRadius(8)
+                            .padding(.horizontal, 15).padding(.vertical, 8)
+                            .background(engine.currentURL.contains("lichess") ? Color.green : Color.clear).cornerRadius(8)
                     }
                 }
-                .padding(.top, 50)
-                .padding(.horizontal)
-                .background(Color.black.opacity(0.8))
+                .padding(.top, 50).padding(.horizontal).background(Color.black.opacity(0.8))
                 
-                ChessWebView(engine: engine)
-                    .ignoresSafeArea(edges: .bottom)
+                ChessWebView(engine: engine).ignoresSafeArea(edges: .bottom)
             }
-            
-            // Eval Bar
-            VStack {
-                EvalBar(score: engine.currentScore)
-                    .frame(width: 12, height: 150)
-                    .cornerRadius(6)
-                    .padding(.leading, 5)
-                    .padding(.top, 100)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .ignoresSafeArea()
             
             if showEngine {
                 VStack {
                     Spacer()
+                    
+                    // FEN Input for Live Analysis
                     HStack {
-                        Text(engine.currentURL.contains("lichess") ? "Live Stockfish Analysis" : "Tap 'Real Engine' to analyze")
-                            .font(.caption2)
-                            .foregroundColor(engine.currentURL.contains("lichess") ? .green : .gray)
-                        Spacer()
+                        TextField("Paste FEN here...", text: $fenInput)
+                            .textFieldStyle(.roundedBorder)
+                            .autocapitalization(.none)
+                            .font(.caption)
+                        
+                        Button(action: { engine.analyzeFEN(fenInput) }) {
+                            Image(systemName: "cpu.fill").foregroundColor(.green).font(.title2)
+                        }
                     }
                     .padding(.horizontal)
-                    .padding(.bottom, 2)
+                    .padding(.bottom, 5)
                     
                     EnginePanel(moves: engine.topMoves, isThinking: engine.isThinking)
-                        .padding(.horizontal)
-                        .padding(.bottom, 40)
+                        .padding(.horizontal).padding(.bottom, 40)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             
-            // Draggable Button
             Image(systemName: showEngine ? "eye.slash.circle.fill" : "eye.circle.fill")
-                .font(.system(size: 44))
-                .foregroundColor(.blue)
-                .shadow(radius: 5)
+                .font(.system(size: 44)).foregroundColor(.blue).shadow(radius: 5)
                 .offset(buttonPosition)
                 .gesture(
                     DragGesture(minimumDistance: 0)
@@ -179,26 +112,9 @@ struct ContentView: View {
                         }
                         .onEnded { value in
                             if !isDragging { withAnimation(.spring()) { showEngine.toggle() } }
-                            lastOffset = buttonPosition
-                            isDragging = false
+                            lastOffset = buttonPosition; isDragging = false
                         }
-                )
-                .padding()
-        }
-    }
-}
-
-// 3. UI Components
-struct EvalBar: View {
-    let score: Double
-    var body: some View {
-        GeometryReader { geo in
-            ZStack(alignment: .bottom) {
-                Rectangle().fill(Color.gray)
-                Rectangle().fill(Color.green)
-                    .frame(height: geo.size.height * CGFloat(max(0, min(1, (score + 10) / 20))))
-            }
-            .cornerRadius(6)
+                ).padding()
         }
     }
 }
@@ -209,9 +125,8 @@ struct EnginePanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: "cpu.fill").foregroundColor(.green)
-                Text(isThinking ? "  Calculating..." : "  Top 3 Engine Moves")
-                    .font(.headline).foregroundColor(.white)
+                Image(systemName: "lock.shield.fill").foregroundColor(.green)
+                Text(isThinking ? "  Calculating..." : "  Top 3 Engine Moves").font(.headline).foregroundColor(.white)
                 Spacer()
             }
             Divider().background(Color.white.opacity(0.3))
@@ -228,65 +143,31 @@ struct EnginePanel: View {
     }
 }
 
-// 4. The Live Engine Logic (Real UCI Parser)
 class LiveEngine: ObservableObject {
-    @Published var topMoves: [String] = ["Waiting for position..."]
+    @Published var topMoves: [String] = ["Paste FEN & tap CPU to analyze"]
     @Published var isThinking: Bool = false
-    @Published var currentScore: Double = 0.0
     @Published var currentURL: String = "https://www.chess.com/play/computer"
     
-    private var parsedMoves: [Int: (move: String, score: String)] = [:]
-    
-    func switchToChessCom() {
-        currentURL = "https://www.chess.com/play/computer"
-        topMoves = ["Switch to Real Engine to analyze"]
-        objectWillChange.send()
-    }
-    
-    func switchToLichess() {
-        currentURL = "https://lichess.org/analysis"
-        topMoves = ["Waiting for position..."]
-        objectWillChange.send()
-    }
-    
-    // Parse real Stockfish UCI output
-    func parseUCIOutput(_ line: String) {
+    func analyzeFEN(_ fen: String) {
+        guard let board = Board.fromFEN(fen) else {
+            topMoves = ["Invalid FEN format"]
+            return
+        }
+        
         isThinking = true
-        let parts = line.split(separator: " ")
+        topMoves = ["Calculating..."]
         
-        guard let multipvIndex = parts.firstIndex(of: "multipv"),
-              let pvIndex = parts.firstIndex(of: "pv") else { return }
-        
-        let rank = Int(parts[multipvIndex + 1]) ?? 0
-        let pv = parts[(pvIndex + 1)...].joined(separator: " ")
-        let bestMove = pv.split(separator: " ").first.map(String.init) ?? ""
-        
-        var scoreStr = "0.0"
-        if let cpIndex = parts.firstIndex(of: "cp") {
-            let cp = Int(parts[cpIndex + 1]) ?? 0
-            scoreStr = String(format: "%+.1f", Double(cp) / 100.0)
-            if rank == 1 { currentScore = Double(cp) / 100.0 }
-        } else if let mateIndex = parts.firstIndex(of: "mate") {
-            let mate = Int(parts[mateIndex + 1]) ?? 0
-            scoreStr = mate > 0 ? "M\(mate)" : "-M\(abs(mate))"
-            if rank == 1 { currentScore = mate > 0 ? 10.0 : -10.0 }
-        }
-        
-        parsedMoves[rank] = (move: bestMove, score: scoreStr)
-        
-        // Update UI with top 3 moves
-        var newMoves: [String] = []
-        for i in 1...3 {
-            if let data = parsedMoves[i] {
-                // Format move like e2e4 to e2-e4
-                let formattedMove = data.move.count == 4 ? "\(data.move.prefix(2))-\(data.move.suffix(2))" : data.move
-                newMoves.append("\(formattedMove)  (Score: \(data.score))")
-            }
-        }
-        
-        if !newMoves.isEmpty {
+        // Run on background thread to prevent UI freeze
+        DispatchQueue.global(qos: .userInitiated).async {
+            let search = SearchV2(maxNodes: 100_000, timeLimit: 2.0)
+            let results = search.topMoves(board, count: 3, maxDepth: 6)
+            
             DispatchQueue.main.async {
-                self.topMoves = newMoves
+                if results.isEmpty {
+                    self.topMoves = ["No legal moves"]
+                } else {
+                    self.topMoves = results.map { "\($0.san)  (Score: \($0.score / 100))" }
+                }
                 self.isThinking = false
             }
         }
