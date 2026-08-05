@@ -1,0 +1,50 @@
+name: Build TrollStore IPA
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-13
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode Project
+        run: xcodegen generate
+
+      - name: Build iOS App
+        run: |
+          xcodebuild -project ChessHelper.xcodeproj \
+                     -scheme ChessHelper \
+                     -sdk iphoneos \
+                     -configuration Release \
+                     -derivedDataPath build \
+                     CODE_SIGNING_ALLOWED=NO
+
+      - name: Download ldid for Signing
+        run: |
+          wget https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_x86_64 -O ldid
+          chmod +x ldid
+
+      - name: Sign App with TrollStore Entitlements
+        run: |
+          ./ldid -SSources/ChessHelper.entitlements build/Build/Products/Release-iphoneos/ChessHelper.app
+
+      - name: Package into IPA
+        run: |
+          mkdir Payload
+          cp -r build/Build/Products/Release-iphoneos/ChessHelper.app Payload/
+          zip -r ChessHelper.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ChessHelper-TrollStore-IPA
+          path: ChessHelper.ipa
