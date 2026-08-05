@@ -1,4 +1,4 @@
-name: Build TrollStore IPA
+name: Build ChessHelper TrollStore IPA
 
 on:
   push:
@@ -7,14 +7,21 @@ on:
 
 jobs:
   build:
-    runs-on: macos-13
+    runs-on: macos-latest
     
     steps:
       - name: Checkout Code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install XcodeGen
         run: brew install xcodegen
+
+      - name: Download Pre-compiled Stockfish for iOS
+        run: |
+          mkdir Sources/Resources
+          # Downloading a pre-compiled arm64 Stockfish binary for iOS
+          curl -L "https://github.com/ncoop57/Stockfish-iOS/releases/download/v1.0/stockfish" -o Sources/Resources/stockfish
+          chmod +x Sources/Resources/stockfish
 
       - name: Generate Xcode Project
         run: xcodegen generate
@@ -26,11 +33,12 @@ jobs:
                      -sdk iphoneos \
                      -configuration Release \
                      -derivedDataPath build \
-                     CODE_SIGNING_ALLOWED=NO
+                     CODE_SIGNING_ALLOWED=NO \
+                     CODE_SIGNING_REQUIRED=NO
 
       - name: Download ldid for Signing
         run: |
-          wget https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_x86_64 -O ldid
+          curl -L https://github.com/ProcursusTeam/ldid/releases/download/v2.1.5-procursus7/ldid_macosx_x86_64 -o ldid
           chmod +x ldid
 
       - name: Sign App with TrollStore Entitlements
@@ -44,7 +52,7 @@ jobs:
           zip -r ChessHelper.ipa Payload
 
       - name: Upload IPA Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: ChessHelper-TrollStore-IPA
           path: ChessHelper.ipa
