@@ -16,35 +16,6 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
-      - name: Generate App Icon
-        run: |
-          mkdir -p Sources/Resources/Assets.xcassets/AppIcon.appiconset
-          # Create a simple green chess pawn icon using Python
-          python3 -c "
-          import base64, os
-          # Base64 of a simple 1024x1024 green circle with white pawn
-          icon_b64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
-          # For a real icon, we will use a solid green color for now to ensure it builds
-          # In a real app, you would upload a real PNG. This is a placeholder.
-          import struct, zlib
-          def create_png(size, color):
-              def chunk(ctype, data):
-                  c = ctype + data
-                  return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xffffffff)
-              header = b'\x89PNG\r\n\x1a\n'
-              ihdr = chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0))
-              row = b'\x00' + bytes(color) * size
-              idat = chunk(b'IDAT', zlib.compress(row * size))
-              iend = chunk(b'IEND', b'')
-              return header + ihdr + idat + iend
-          png = create_png(1024, [0, 200, 0]) # Green background
-          with open('Sources/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png', 'wb') as f:
-              f.write(png)
-          "
-          # Create Contents.json for the icon
-          echo '{"images":[{"idiom":"universal","platform":"ios","size":"1024x1024","filename":"AppIcon.png"}],"info":{"version":1,"author":"xcode"}}' > Sources/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json
-          echo '{"info":{"version":1,"author":"xcode"}}' > Sources/Resources/Assets.xcassets/Contents.json
-
       - name: Generate Xcode Project
         run: xcodegen generate
 
