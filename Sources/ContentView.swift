@@ -41,7 +41,6 @@ struct ChessWebView: UIViewRepresentable {
                         var actualFile = isBlack ? (7 - file) : file;
                         var squareIndex = actualRank * 8 + actualFile;
                         
-                        // Try multiple ways to find the square
                         var square = board.querySelector('.square-' + squareIndex) || 
                                      board.querySelector('[data-square="' + squareIndex + '"]');
                         
@@ -49,12 +48,10 @@ struct ChessWebView: UIViewRepresentable {
                         var isWhite = false;
                         
                         if (square) {
-                            // Look for ANY image in the square
                             var img = square.querySelector('img');
                             if (img && img.src) {
                                 var src = img.src.toLowerCase();
                                 
-                                // Check image source for piece codes (Chess.com standard)
                                 if (src.includes('wp') || src.includes('white-pawn') || src.includes('wpng')) { pieceType = 'p'; isWhite = true; }
                                 else if (src.includes('wn') || src.includes('white-knight')) { pieceType = 'n'; isWhite = true; }
                                 else if (src.includes('wb') || src.includes('white-bishop')) { pieceType = 'b'; isWhite = true; }
@@ -136,8 +133,9 @@ struct ChessWebView: UIViewRepresentable {
             if message.name == "fenDetector", let fen = message.body as? String {
                 engine.analyzeFEN(fen)
             } else if message.name == "debugHTML", let html = message.body as? String {
+                // FIX: Added 'self.' here to satisfy Swift's closure rules
                 DispatchQueue.main.async {
-                    engine.debugHTML = html
+                    self.engine.debugHTML = html
                 }
             }
         }
@@ -174,10 +172,9 @@ struct ContentView: View {
                     Button(action: { showManualInput.toggle() }) {
                         Image(systemName: "keyboard").foregroundColor(.yellow).font(.title3)
                     }
-                    // NEW DEBUG BUTTON
                     Button(action: { 
                         showDebug = true
-                        engine.runDebugScan()
+                        // Trigger debug scan via JS
                     }) {
                         Image(systemName: "ladybug.fill").foregroundColor(.red).font(.title3)
                     }
@@ -218,7 +215,6 @@ struct ContentView: View {
                 }
             }
             
-            // Debug HTML Overlay
             if showDebug {
                 ZStack {
                     Color.black.opacity(0.9).ignoresSafeArea()
@@ -321,11 +317,6 @@ class LiveEngine: ObservableObject {
     @Published var debugHTML: String = "Tap the red bug icon to scan HTML..."
     
     private var lastAnalyzedFen: String = ""
-    private var webViewForDebug: WKWebView?
-    
-    func runDebugScan() {
-        // This will be triggered by the WebView coordinator
-    }
     
     func analyzeFEN(_ fen: String) {
         scanCount += 1
