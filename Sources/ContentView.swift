@@ -15,16 +15,32 @@ struct ChessWebView: UIViewRepresentable {
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
         config.defaultWebpagePreferences.preferredContentMode = .mobile
+        config.defaultWebpagePreferences.allowsContentJavaScript = true
         
         let userContentController = WKUserContentController()
         
-        // STEALTH: Advanced Anti-Fingerprinting
-        let antiFingerprint = """
+        // STEALTH: Advanced Anti-Fingerprinting & Dimension Fix
+        let stealthAndFixScript = """
+        // Anti-Fingerprinting
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
         Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
         Object.defineProperty(navigator, 'hardwareConcurrency', {get: () => 4});
+        
+        // Disable Zoom and Text Selection (Stealth)
+        document.addEventListener('gesturestart', function (e) { e.preventDefault(); });
+        document.body.style.userSelect = 'none';
+        document.body.style.webkitUserSelect = 'none';
+        
+        // FIX DIMENSIONS: Force board to fit screen
+        const style = document.createElement('style');
+        style.innerHTML = `
+            body { margin: 0; padding: 0; overflow-x: hidden; width: 100vw; }
+            .board { width: 100% !important; max-width: 100vw !important; height: auto !important; }
+            .layout { width: 100% !important; }
+        `;
+        document.head.appendChild(style);
         """
-        userContentController.addUserScript(WKUserScript(source: antiFingerprint, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        userContentController.addUserScript(WKUserScript(source: stealthAndFixScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
         
         // Auto-Detect Color & Board State
         let detectionScript = """
@@ -37,7 +53,6 @@ struct ChessWebView: UIViewRepresentable {
                 if (board.classList.contains('orientation-white')) color = 'white';
                 else if (board.classList.contains('orientation-black')) color = 'black';
                 
-                // Try to find opening name from chess.com UI
                 const openingTag = document.querySelector('.opening-name');
                 if (openingTag) opening = openingTag.innerText;
             }
@@ -46,7 +61,6 @@ struct ChessWebView: UIViewRepresentable {
                 window.webkit.messageHandlers.boardState.postMessage(color + '|' + opening);
             }
             
-            // HUMANIZE: Random delay between 4000ms and 8000ms
             const randomDelay = Math.floor(Math.random() * 4000) + 4000;
             setTimeout(detectAndReport, randomDelay);
         }
@@ -60,6 +74,10 @@ struct ChessWebView: UIViewRepresentable {
         webview.backgroundColor = UIColor.systemBackground
         webview.isOpaque = true
         webview.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        webview.allowsBackForwardNavigationGestures = true
+        
+        // Use standard Safari User-Agent to help bots load
+        webview.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.4 Mobile/15E148 Safari/604.1"
         
         let url = URL(string: "https://www.chess.com/play/computer")!
         webview.load(URLRequest(url: url))
@@ -99,6 +117,7 @@ struct ContentView: View {
     @State private var showEngine = true
     @State private var buttonPosition: CGSize = .zero
     @State private var lastOffset: CGSize = .zero
+    @State private var isDragging = false // FIX: Tracks if button is being dragged
     
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -120,7 +139,6 @@ struct ContentView: View {
                 VStack {
                     Spacer()
                     
-                    // Top Info Bar
                     HStack {
                         Text(engine.openingName)
                             .font(.caption2)
@@ -141,7 +159,6 @@ struct ContentView: View {
                     .padding(.horizontal)
                     .padding(.bottom, 2)
                     
-                    // Main Engine Panel
                     EnginePanel(moves: engine.getMoves(), isThinking: engine.isThinking, isBlunder: engine.isBlunder)
                         .padding(.horizontal)
                         .padding(.bottom, 40)
@@ -149,24 +166,31 @@ struct ContentView: View {
                 }
             }
             
-            // Draggable & Tappable Hidden Button
+            // FIX: Draggable & Tappable Hidden Button
             Image(systemName: showEngine ? "eye.slash.circle.fill" : "eye.circle.fill")
                 .font(.system(size: 44))
                 .foregroundColor(.blue)
                 .shadow(radius: 5)
                 .offset(buttonPosition)
                 .gesture(
-                    DragGesture()
+                    DragGesture(minimumDistance: 0)
                         .onChanged { value in
-                            buttonPosition = CGSize(width: lastOffset.width + value.translation.width, height: lastOffset.height + value.translation.height)
+                            // Only register as drag if moved more than 5 pixels
+                            if abs(value.translation.width) > 5 || abs(value.translation.height) > 5 {
+                                isDragging = true
+                                buttonPosition = CGSize(
+                                    width: lastOffset.width + value.translation.width,
+                                    height: lastOffset.height + value.translation.height
+                                )
+                            }
                         }
                         .onEnded { value in
-                            // If moved less than 10 points, treat as a TAP
-                            if abs(value.translation.width) < 10 && abs(value.translation.height) < 10 {
+                            if !isDragging {
+                                // It was a tap, not a drag
                                 withAnimation(.spring()) { showEngine.toggle() }
-                            } else {
-                                lastOffset = buttonPosition
                             }
+                            lastOffset = buttonPosition
+                            isDragging = false
                         }
                 )
                 .padding()
@@ -176,8 +200,7 @@ struct ContentView: View {
 
 // 3. UI Components
 struct EvalBar: View {
-    let score: Double // -10 to 10
-    
+    let score: Double
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .bottom) {
@@ -194,7 +217,6 @@ struct EnginePanel: View {
     let moves: [String]
     let isThinking: Bool
     let isBlunder: Bool
-    
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -205,9 +227,7 @@ struct EnginePanel: View {
                     .foregroundColor(isBlunder ? .red : .white)
                 Spacer()
             }
-            
             Divider().background(Color.white.opacity(0.3))
-            
             ForEach(Array(moves.enumerated()), id: \.offset) { index, move in
                 HStack {
                     Text("#\(index + 1)").fontWeight(.bold).foregroundColor(index == 0 ? .green : (index == 1 ? .yellow : .orange)).frame(width: 25, alignment: .center)
@@ -217,10 +237,7 @@ struct EnginePanel: View {
                 .padding(.vertical, 4).padding(.horizontal, 8).background(Color.white.opacity(0.1)).cornerRadius(6)
             }
         }
-        .padding()
-        .background(Color.black.opacity(0.90))
-        .cornerRadius(20)
-        .shadow(color: isBlunder ? .red.opacity(0.5) : .black.opacity(0.5), radius: 15, x: 0, y: 10)
+        .padding().background(Color.black.opacity(0.90)).cornerRadius(20).shadow(color: isBlunder ? .red.opacity(0.5) : .black.opacity(0.5), radius: 15, x: 0, y: 10)
     }
 }
 
@@ -234,47 +251,25 @@ class LiveEngine: ObservableObject {
     @Published var currentScore: Double = 0.0
     @Published var isBlunder: Bool = false
     
-    var activeColor: String {
-        return manualOverride ?? detectedColor
-    }
-    
+    var activeColor: String { return manualOverride ?? detectedColor }
     private var lastScore: Double = 0.0
     
     func updateDetectedColor(_ color: String) {
-        if detectedColor != color {
-            detectedColor = color
-            analyzeCurrentPosition()
-        }
+        if detectedColor != color { detectedColor = color; analyzeCurrentPosition() }
     }
-    
-    func updateOpening(_ name: String) {
-        openingName = name
-    }
-    
-    func forceToggleColor() {
-        manualOverride = (activeColor == "white") ? "black" : "white"
-        analyzeCurrentPosition()
-    }
+    func updateOpening(_ name: String) { openingName = name }
+    func forceToggleColor() { manualOverride = (activeColor == "white") ? "black" : "white"; analyzeCurrentPosition() }
     
     func analyzeCurrentPosition() {
         isThinking = true
-        
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            // Simulate engine analysis
             let newScore = Double.random(in: -2.0...2.0)
             self.currentScore = newScore
-            
-            // Blunder detection: if score drops by more than 1.5 points
             if abs(newScore - self.lastScore) > 1.5 {
                 self.isBlunder = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
-                    self.isBlunder = false
-                }
-            } else {
-                self.isBlunder = false
-            }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { self.isBlunder = false }
+            } else { self.isBlunder = false }
             self.lastScore = newScore
-            
             let rawMoves = [
                 "e2-e4  (Score: +\(String(format: "%.1f", newScore)))",
                 "d2-d4  (Score: +\(String(format: "%.1f", newScore - 0.1)))",
@@ -284,12 +279,9 @@ class LiveEngine: ObservableObject {
             self.isThinking = false
         }
     }
-    
     func getMoves() -> [String] {
         if activeColor == "black" {
-            return topMoves.map { move in
-                move.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "-0.", with: "+0.")
-            }
+            return topMoves.map { move in move.replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "-0.", with: "+0.") }
         }
         return topMoves
     }
